@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farkle — practice vs Rusty</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fffdf8; --ink: #2b2620; --muted: #7a7266;
+    --line: #e3ddd0; --accent: #b5432c; --accent2: #2f6f4f; --gold: #c69a3a;
+    --pip: #2b2620; --die: #fffefb; --die-kept: #efe7d6;
+    --lock: #2f6f4f; --hold: #c69a3a; --score: #2f6f4f; --bad: #b5432c;
+    --shadow: 0 2px 6px rgba(0,0,0,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1815; --panel: #241f1a; --ink: #ece5d8; --muted: #9a9184;
+      --line: #38312a; --accent: #e0674c; --accent2: #5fbf8c; --gold: #d8b25a;
+      --pip: #241f1a; --die: #ece5d8; --die-kept: #8a8172;
+      --lock: #5fbf8c; --hold: #d8b25a; --score: #5fbf8c; --bad: #e0674c;
+      --shadow: 0 2px 8px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+  header { text-align: center; margin-bottom: 8px; }
+  h1 { font-size: 1.9rem; margin: 0 0 2px; letter-spacing: .5px; }
+  h1 .dot { color: var(--accent); }
+  .sub { color: var(--muted); font-size: .92rem; margin-bottom: 18px; text-align: center; }
+  .scoreboard { display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .score-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 20px; min-width: 130px; text-align: center; box-shadow: var(--shadow);
+  }
+  .score-card.active { border-color: var(--accent2); box-shadow: 0 0 0 2px var(--accent2) inset; }
+  .score-card .who { font-size: .78rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .score-card .val { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .turn-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: .9rem; margin-bottom: 12px; flex-wrap: wrap; gap: 6px; }
+  .turn-meta b { color: var(--ink); }
+  .dice-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; min-height: 74px; align-items: center; margin: 6px 0 4px; }
+  .die {
+    width: 60px; height: 60px; border-radius: 12px; background: var(--die);
+    display: grid; grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr);
+    padding: 9px; cursor: pointer; box-shadow: var(--shadow); transition: transform .08s, box-shadow .12s;
+    border: 2px solid transparent; position: relative;
+  }
+  .die.static { cursor: default; }
+  .die:not(.static):hover { transform: translateY(-2px); }
+  .die .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--pip); align-self: center; justify-self: center; }
+  .die.lock { border-color: var(--lock); box-shadow: 0 0 0 3px var(--lock) inset, var(--shadow); }
+  .die.hold { border-color: var(--hold); box-shadow: 0 0 0 3px var(--hold) inset, var(--shadow); background: color-mix(in srgb, var(--hold) 14%, var(--die)); }
+  .die.hintable { outline: 2px dashed var(--gold); outline-offset: 2px; }
+  .die .badge {
+    position: absolute; top: -8px; right: -8px; font-size: .6rem; font-weight: 700;
+    background: var(--hold); color: #fff; border-radius: 8px; padding: 1px 5px; letter-spacing: .5px;
+  }
+  .p1 { grid-area: 1/1; } .p2 { grid-area: 1/2; } .p3 { grid-area: 1/3; }
+  .p4 { grid-area: 2/1; } .p5 { grid-area: 2/2; } .p6 { grid-area: 2/3; }
+  .p7 { grid-area: 3/1; } .p8 { grid-area: 3/2; } .p9 { grid-area: 3/3; }
+  .legend { text-align: center; font-size: .8rem; color: var(--muted); margin: 2px 0 6px; }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; margin: 0 3px 0 10px; }
+  .legend .sw.lock { background: var(--lock); } .legend .sw.hold { background: var(--hold); }
+  .selection-info { text-align: center; min-height: 26px; margin: 8px 0 4px; font-size: 1.05rem; }
+  .selection-info .ok { color: var(--score); font-weight: 600; }
+  .selection-info .no { color: var(--bad); }
+  .selection-info .hold-txt { color: var(--gold); font-weight: 600; }
+  .controls { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    font: inherit; font-weight: 600; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 18px; background: var(--panel); color: var(--ink); cursor: pointer;
+    transition: transform .06s, background .12s, border-color .12s;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.go { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+  .toolbar { display: flex; justify-content: center; gap: 18px; align-items: center; margin-top: 8px; font-size: .9rem; color: var(--muted); flex-wrap: wrap; }
+  .toolbar label { cursor: pointer; user-select: none; }
+  .log { font-size: .88rem; max-height: 200px; overflow-y: auto; }
+  .log h3, .ref h3 { margin: 0 0 8px; font-size: .82rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .log .entry { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .log .entry.you { color: var(--ink); }
+  .log .entry.rusty { color: var(--muted); }
+  .log .entry .tag { font-weight: 700; }
+  .log .entry.hot { color: var(--gold); font-weight: 600; }
+  .log .entry.farkle { color: var(--bad); font-weight: 600; }
+  .ref table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .ref td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  .ref td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--score); font-weight: 600; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } .die { width: 52px; height: 52px; } }
+  details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  .banner { text-align: center; font-size: 1.15rem; font-weight: 700; padding: 10px; border-radius: 10px; margin-bottom: 12px; }
+  .banner.win { background: color-mix(in srgb, var(--accent2) 18%, transparent); color: var(--accent2); }
+  .banner.lose { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  .foot { text-align: center; color: var(--muted); font-size: .82rem; margin-top: 20px; }
+  .foot a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Farkle<span class="dot">.</span></h1></header>
+  <div class="sub">Practice reading the dice against <b>Rusty</b>, a friendly bot. Basic scoring · hot dice · optional hold rule.</div>
+
+  <div class="scoreboard">
+    <div class="score-card" id="card-you"><div class="who">You</div><div class="val" id="you-score">0</div></div>
+    <div class="score-card" id="card-rusty"><div class="who">Rusty</div><div class="val" id="rusty-score">0</div></div>
+    <div class="score-card"><div class="who">Target</div><div class="val" id="target">4000</div></div>
+  </div>
+
+  <div id="banner-slot"></div>
+
+  <div class="panel" id="board">
+    <div class="turn-meta">
+      <div>Turn total: <b id="turn-total">0</b></div>
+      <div>Dice in hand: <b id="dice-in-hand">6</b></div>
+    </div>
+    <div class="dice-row" id="dice-row"></div>
+    <div class="legend" id="legend"></div>
+    <div class="selection-info" id="sel-info">Press <b>Roll</b> to start your turn.</div>
+    <div class="controls" id="controls"></div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="hint-toggle"> Highlight scoring dice</label>
+      <label><input type="checkbox" id="hold-toggle" checked> Hold rule (build combos)</label>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel log"><h3>Play-by-play</h3><div id="log"></div></div>
+    <div class="panel ref">
+      <h3>Basic scoring</h3>
+      <table>
+        <tr><td>Each 1</td><td>100</td></tr>
+        <tr><td>Each 5</td><td>50</td></tr>
+        <tr><td>Three 1s</td><td>1000</td></tr>
+        <tr><td>Three 2s</td><td>200</td></tr>
+        <tr><td>Three 3s</td><td>300</td></tr>
+        <tr><td>Three 4s</td><td>400</td></tr>
+        <tr><td>Three 5s</td><td>500</td></tr>
+        <tr><td>Three 6s</td><td>600</td></tr>
+      </table>
+      <details style="margin-top:10px">
+        <summary>The hold rule</summary>
+        <p style="font-size:.88rem;color:var(--muted)">
+          With the hold rule on, click a die once to <b style="color:var(--lock)">lock</b>
+          it (score it) and again to <b style="color:var(--gold)">hold</b> it — a die you
+          keep, unscored, to build a combo later (e.g. hold two 6s hoping to roll a third
+          for 600). You may set aside only held dice and reroll the rest, banking nothing
+          this roll. Every roll must still produce a <b>new</b> score (a fresh 1/5 or a
+          completed combo) or you Farkle and lose the turn. Fewer dice rerolled means more
+          risk — that's the gamble.
+        </p>
+      </details>
+      <p style="font-size:.82rem;color:var(--muted);margin:10px 0 0">
+        Only 1s, 5s and three-of-a-kind score. For the optimal-play advisor, run
+        <code>python -m farkle --hold advise …</code> from the repo.
+      </p>
+    </div>
+  </div>
+
+  <div class="foot">New game? <button id="new-game" style="padding:5px 12px;font-size:.85rem">Restart</button></div>
+</div>
+
+<script>
+"use strict";
+
+// ---- basic scoring engine (mirrors the Python BASIC_RULES) ----------------
+const SINGLE = {1: 100, 5: 50};
+const THREE = {1: 1000, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600};
+
+function countsOf(dice) { const c=[0,0,0,0,0,0,0]; for (const d of dice) c[d]++; return c; }
+
+const _memo = new Map();
+function bestPartition(counts) {           // max score using EVERY die, or null
+  const key = counts.join(",");
+  if (_memo.has(key)) return _memo.get(key);
+  if (counts.reduce((a,b)=>a+b,0) === 0) { _memo.set(key,0); return 0; }
+  let best = null;
+  const consider = (pts, rem) => { const s = bestPartition(rem); if (s!==null){ const t=pts+s; if(best===null||t>best) best=t; } };
+  for (let f=1; f<=6; f++) if (counts[f]>=3) { const r=counts.slice(); r[f]-=3; consider(THREE[f], r); }
+  for (const f of [1,5]) if (counts[f]>=1) { const r=counts.slice(); r[f]-=1; consider(SINGLE[f], r); }
+  _memo.set(key, best); return best;
+}
+function scoreSelection(dice) { if (dice.length===0) return null; return bestPartition(countsOf(dice)); }
+
+// Max points from any SUBSET of the dice (0 if nothing scores).
+function maxExtract(dice) {
+  const c = countsOf(dice); let score = 0;
+  for (let f=1; f<=6; f++) {
+    const triples = Math.floor(c[f]/3);
+    score += triples * THREE[f];
+    if (f===1 || f===5) score += (c[f] - triples*3) * SINGLE[f];  // leftover singles
+  }
+  return score;
+}
+function scoringFaces(dice) {
+  const c = countsOf(dice); const faces = new Set();
+  for (let f=1; f<=6; f++) { if (f===1||f===5){ if(c[f]>0) faces.add(f);} else if (c[f]>=3) faces.add(f); }
+  return faces;
+}
+function maxLockKeep(dice) {    // highest-scoring lock (uses every scoring die)
+  const c = countsOf(dice); const keep = [];
+  for (let f=1; f<=6; f++) {
+    if (f===1||f===5) for (let i=0;i<c[f];i++) keep.push(f);
+    else { const t = Math.floor(c[f]/3)*3; for (let i=0;i<t;i++) keep.push(f); }
+  }
+  return { dice: keep, score: scoreSelection(keep)||0 };
+}
+
+// ---- Rusty (no holding — a clean baseline to learn from) ------------------
+function rustyDecision(turnTotal, dice) {
+  const keep = maxLockKeep(dice);
+  const wouldBe = turnTotal + keep.score;
+  const left = (dice.length - keep.dice.length) === 0 ? 6 : dice.length - keep.dice.length;
+  return { keep, rollAgain: wouldBe < 350 && left >= 3 };
+}
+
+// ---- game state -----------------------------------------------------------
+const TARGET = 4000;
+let S;
+function newGame() {
+  S = { you:0, rusty:0, turnTotal:0, locked:0, held:[], pool:[], sel:[],
+        phase:"ready", turn:"you", over:false };
+  document.getElementById("banner-slot").innerHTML = "";
+  logClear(); render();
+}
+function holdRuleOn() { return document.getElementById("hold-toggle").checked; }
+function rnd(n){ const a=[]; for(let i=0;i<n;i++) a.push(1+Math.floor(Math.random()*6)); return a; }
+function diceInHand(){ return 6 - S.locked - S.held.length; }
+
+// ---- rendering ------------------------------------------------------------
+const PIPS = {1:[5],2:[1,9],3:[1,5,9],4:[1,3,7,9],5:[1,3,5,7,9],6:[1,3,4,6,7,9]};
+function dieEl(face, opts={}) {
+  const d = document.createElement("div");
+  d.className = "die" + (opts.static?" static":"");
+  if (opts.state==="lock") d.className += " lock";
+  if (opts.state==="hold") d.className += " hold";
+  if (opts.hintable) d.className += " hintable";
+  for (const p of PIPS[face]) { const s=document.createElement("span"); s.className="pip p"+p; d.appendChild(s); }
+  if (opts.wasHeld) { const b=document.createElement("span"); b.className="badge"; b.textContent="HELD"; d.appendChild(b); }
+  if (opts.onClick) d.addEventListener("click", opts.onClick);
+  return d;
+}
+
+function render() {
+  document.getElementById("you-score").textContent = S.you;
+  document.getElementById("rusty-score").textContent = S.rusty;
+  document.getElementById("target").textContent = TARGET;
+  document.getElementById("turn-total").textContent = S.turnTotal;
+  document.getElementById("dice-in-hand").textContent = diceInHand();
+  document.getElementById("card-you").classList.toggle("active", S.turn==="you" && !S.over);
+  document.getElementById("card-rusty").classList.toggle("active", S.turn==="rusty" && !S.over);
+
+  const row = document.getElementById("dice-row"); row.innerHTML = "";
+  const hint = document.getElementById("hint-toggle").checked;
+  const scoreFaces = hint ? scoringFaces(S.pool.map(p=>p.face)) : new Set();
+
+  if (S.phase === "rolled") {
+    S.pool.forEach((pd, i) => {
+      row.appendChild(dieEl(pd.face, {
+        state: S.sel[i],
+        wasHeld: pd.held,
+        hintable: hint && scoreFaces.has(pd.face) && !S.sel[i],
+        onClick: () => cycle(i),
+      }));
+    });
+  }
+  document.getElementById("legend").innerHTML = (S.phase==="rolled" && S.turn==="you")
+    ? (holdRuleOn()
+        ? 'click a die: <span class="sw lock"></span>lock (score) → <span class="sw hold"></span>hold (build) → off'
+        : 'click a die to <span class="sw lock"></span>set it aside')
+    : "";
+  renderControls(); renderSelectionInfo();
+}
+
+function selFaces(state) { return S.pool.filter((_,i)=>S.sel[i]===state).map(p=>p.face); }
+
+function renderSelectionInfo() {
+  const info = document.getElementById("sel-info");
+  if (S.over) { info.innerHTML = "Game over — press <b>Restart</b> to play again."; return; }
+  if (S.turn === "rusty") { info.innerHTML = "Rusty is thinking…"; return; }
+  if (S.phase === "ready") { info.innerHTML = "Press <b>Roll</b> to roll your "+diceInHand()+" dice."; return; }
+  const lock = selFaces("lock"), hold = selFaces("hold");
+  if (lock.length===0 && hold.length===0) { info.innerHTML = "Click dice to set aside — <span class=\"ok\">lock</span> to score, <span class=\"hold-txt\">hold</span> to build."; return; }
+  let msg = "";
+  if (lock.length) {
+    const sc = scoreSelection(lock);
+    msg = sc===null
+      ? `<span class="no">✗ [${lock.join(" ")}] isn't a valid scoring lock.</span>`
+      : `<span class="ok">✓ lock [${lock.join(" ")}] = ${sc}</span>`;
+  }
+  if (hold.length) {
+    msg += (msg ? " · " : "") + `<span class="hold-txt">holding [${hold.join(" ")}]</span>`;
+    if (!lock.length) msg += ` <span style="color:var(--muted)">— roll on, banking nothing this roll</span>`;
+  }
+  info.innerHTML = msg;
+}
+
+function renderControls() {
+  const c = document.getElementById("controls"); c.innerHTML = "";
+  if (S.over || S.turn==="rusty") return;
+  if (S.phase === "ready") { c.appendChild(mkBtn("🎲 Roll "+diceInHand()+" dice", "primary", roll)); return; }
+  if (S.phase === "rolled") {
+    const lock = selFaces("lock"), hold = selFaces("hold");
+    const lockOk = lock.length === 0 || scoreSelection(lock) !== null;
+    const lockScores = lock.length > 0 && scoreSelection(lock) !== null;
+    const setAsideCount = lock.length + hold.length;
+    const rerollLeft = S.pool.length - setAsideCount;
+    const canRoll = lockOk && setAsideCount >= 1 && rerollLeft >= 1;
+    c.appendChild(mkBtn("Set aside & roll again", "go", ()=>setAside(true), !canRoll));
+    c.appendChild(mkBtn("Set aside & bank", "", ()=>setAside(false), !lockScores));
+    const best = mkBtn("Auto: max points", "", autoMax); best.style.marginLeft="8px";
+    c.appendChild(best);
+  }
+}
+function mkBtn(label, cls, fn, disabled) {
+  const b=document.createElement("button"); b.textContent=label; if(cls)b.className=cls;
+  if(disabled)b.disabled=true; b.addEventListener("click",fn); return b;
+}
+
+// ---- interactions ---------------------------------------------------------
+function cycle(i) {
+  const order = holdRuleOn() ? [undefined,"lock","hold"] : [undefined,"lock"];
+  const cur = order.indexOf(S.sel[i]);
+  S.sel[i] = order[(cur+1) % order.length];
+  render();
+}
+
+function roll() {
+  const r = diceInHand();
+  const rolled = rnd(r);
+  S.pool = S.held.map(f=>({face:f, held:true})).concat(rolled.map(f=>({face:f, held:false})));
+  S.sel = new Array(S.pool.length).fill(undefined);
+  S.phase = "rolled";
+  const heldBefore = maxExtract(S.held);
+  if (maxExtract(S.pool.map(p=>p.face)) <= heldBefore) {
+    const note = S.held.length ? ` (was holding [${S.held.join(" ")}])` : "";
+    log("you", `rolled [${rolled.join(" ")}]${note} — <span class="tag">FARKLE!</span> lost ${S.turnTotal}`, "farkle");
+    S.turnTotal = 0; endTurn("you"); return;
+  }
+  render();
+}
+
+function setAside(rollAgain) {
+  const lock = selFaces("lock"), hold = selFaces("hold");
+  const sc = lock.length ? scoreSelection(lock) : 0;
+  if (lock.length && sc === null) return;               // a lock must actually score
+  if (!rollAgain && !(lock.length && sc)) return;       // banking needs a scoring lock
+  if (rollAgain && (lock.length + hold.length === 0)) return;  // set aside something
+
+  S.turnTotal += sc;
+  S.locked += lock.length;
+  S.held = hold;
+  let hot = false;
+  if (S.locked === 6) { S.locked = 0; S.held = []; hot = true; }
+  const lockNote = lock.length ? `locked [${lock.join(" ")}] (+${sc})` : "locked nothing";
+  const holdNote = hold.length ? `, holding [${hold.join(" ")}]` : "";
+  log("you", `${lockNote}${holdNote} — turn total ${S.turnTotal}` + (hot?` <span class="tag">HOT DICE!</span>`:""), hot?"hot":"you");
+
+  if (!rollAgain) {
+    S.you += S.turnTotal;
+    log("you", `<span class="tag">BANKED ${S.turnTotal}</span> — you now have ${S.you}`, "you");
+    S.turnTotal = 0; endTurn("you"); return;
+  }
+  if (diceInHand() === 0) {   // held everything, nothing to roll → must bank
+    S.you += S.turnTotal;
+    log("you", `nothing left to roll — <span class="tag">BANKED ${S.turnTotal}</span>`, "you");
+    S.turnTotal = 0; endTurn("you"); return;
+  }
+  S.phase = "ready"; render(); roll();
+}
+
+function autoMax() {   // simple helper: select the max-scoring lock, no hold
+  const keep = maxLockKeep(S.pool.map(p=>p.face));
+  S.sel = new Array(S.pool.length).fill(undefined);
+  const need = countsOf(keep.dice), taken=[0,0,0,0,0,0,0];
+  S.pool.forEach((pd,i)=>{ if (taken[pd.face] < need[pd.face]) { S.sel[i]="lock"; taken[pd.face]++; } });
+  render();
+  document.getElementById("sel-info").innerHTML =
+    `<span class="ok">Max points now: lock [${keep.dice.join(" ")}] = ${keep.score}.</span> ` +
+    (holdRuleOn() ? `Click dice to <span class="hold-txt">hold</span> instead if you'd rather build a combo.` : ``);
+}
+
+// ---- turn flow ------------------------------------------------------------
+function endTurn(who) {
+  S.turnTotal=0; S.locked=0; S.held=[]; S.pool=[]; S.sel=[]; S.phase="ready";
+  if (S.you>=TARGET || S.rusty>=TARGET) { finish(); return; }
+  if (who==="you") { S.turn="rusty"; render(); setTimeout(rustyTurn, 700); }
+  else { S.turn="you"; render(); }
+}
+function rustyTurn() { S.turn="rusty"; S.turnTotal=0; S.locked=0; S.held=[]; render(); stepRusty(); }
+function stepRusty() {
+  const dice = rnd(6 - S.locked);
+  S.pool = dice.map(f=>({face:f, held:false})); S.sel = new Array(dice.length).fill(undefined); S.phase="rolled";
+  render();
+  if (maxExtract(dice) === 0) {
+    log("rusty", `rolled [${dice.join(" ")}] — <span class="tag">FARKLE!</span> lost ${S.turnTotal}`, "farkle");
+    S.turnTotal=0; endTurn("rusty"); return;
+  }
+  const { keep, rollAgain } = rustyDecision(S.turnTotal, dice);
+  S.turnTotal += keep.score; S.locked += keep.dice.length;
+  let hot=false; if (S.locked===6){ S.locked=0; hot=true; }
+  log("rusty", `rolled [${dice.join(" ")}] → keeps [${keep.dice.join(" ")}] (+${keep.score}) — total ${S.turnTotal}`+(hot?` <span class="tag">HOT!</span>`:""), hot?"hot":"rusty");
+  const need=countsOf(keep.dice), taken=[0,0,0,0,0,0,0];
+  S.sel = new Array(dice.length).fill(undefined);
+  dice.forEach((f,i)=>{ if(taken[f]<need[f]){ S.sel[i]="lock"; taken[f]++; }});
+  render();
+  if (rollAgain || (hot && S.turnTotal<350)) setTimeout(stepRusty, 850);
+  else {
+    S.rusty += S.turnTotal;
+    log("rusty", `<span class="tag">BANKS ${S.turnTotal}</span> — Rusty now has ${S.rusty}`, "rusty");
+    setTimeout(()=>endTurn("rusty"), 500);
+  }
+}
+function finish() {
+  S.over=true; S.turn=null;
+  let msg, cls;
+  if (S.you>S.rusty){ msg=`🎉 You win, ${S.you} to ${S.rusty}!`; cls="win"; }
+  else if (S.rusty>S.you){ msg=`Rusty wins, ${S.rusty} to ${S.you}. Run it back!`; cls="lose"; }
+  else { msg=`Dead tie at ${S.you}.`; cls="win"; }
+  document.getElementById("banner-slot").innerHTML = `<div class="banner ${cls}">${msg}</div>`;
+  render();
+}
+
+// ---- log ------------------------------------------------------------------
+function log(who, html, cls) {
+  const el = document.getElementById("log");
+  const div = document.createElement("div");
+  div.className = "entry " + (cls||who);
+  const name = who==="you" ? "You" : "Rusty";
+  div.innerHTML = `<span class="tag">${name}:</span> ${html}`;
+  el.prepend(div);
+}
+function logClear() { document.getElementById("log").innerHTML = ""; }
+
+// ---- wire up --------------------------------------------------------------
+document.getElementById("hint-toggle").addEventListener("change", render);
+document.getElementById("hold-toggle").addEventListener("change", () => {
+  // dropping the hold rule clears any pending holds
+  if (!holdRuleOn() && S.sel) S.sel = S.sel.map(s => s==="hold" ? undefined : s);
+  render();
+});
+document.getElementById("new-game").addEventListener("click", newGame);
+newGame();
+</script>
+</body>
+</html>
