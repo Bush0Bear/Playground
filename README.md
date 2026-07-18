@@ -26,17 +26,18 @@ banking a lone 50.
 No install needed — open the single-file web version and play against **Rusty**,
 a friendly practice bot, to learn to read the scoring patterns:
 
-**▶ https://rawcdn.githack.com/Bush0Bear/Playground/3dc71c33c3f4d303e4f81b2945d25ee854f9af1a/farkle.html**
+**▶ https://raw.githack.com/Bush0Bear/Playground/farkle-web/farkle.html**
 
 It shows the score of your current selection live, can highlight which dice can
 score, narrates every move Rusty makes, and has a toggle for the hold rule.
 
-> The link is [githack](https://raw.githack.com)-served and **pinned to a
-> commit** on purpose: this branch's name contains a slash
-> (`claude/farkle-game-simulator-eho5pu`), and githack's URL scheme can't tell a
-> slashed branch name apart from a file path — so a branch-based "latest" link
-> won't resolve. A commit SHA has no slash and always works. When `farkle.html`
-> changes, swap the SHA for the new commit's (or just open the file locally).
+> This stable link is served by [githack](https://raw.githack.com) from the
+> **`farkle-web`** branch, kept in sync with the newest `farkle.html`. It uses a
+> slash-free branch name deliberately: the development branch
+> (`claude/farkle-game-simulator-eho5pu`) contains a slash, which githack's URL
+> scheme can't tell apart from a file path, so a link through that branch never
+> resolves. Need an exact, immutable version instead? Pin a commit:
+> `https://rawcdn.githack.com/Bush0Bear/Playground/<commit-sha>/farkle.html`.
 
 ```
 $ python -m farkle advise 5 5 5 2 3 4
