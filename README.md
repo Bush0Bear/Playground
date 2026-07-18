@@ -220,8 +220,10 @@ rules:
 - **Every roll must produce a *new* score** — a freshly rolled 1/5, or the
   completion of a combo you're holding. If the new dice add nothing, it's a
   **Farkle** and the turn is lost.
-- You must still lock at least one scoring die each roll (you can't hold
-  everything and stall).
+- Each roll you must set aside **at least one die** — but it can be a *held*
+  (non-scoring) die. You may hold dice and reroll the rest **without banking a
+  scoring die this roll** (even rerolling a scoring die you chose not to take),
+  as long as the roll itself was valid.
 
 The tension is exactly what you'd expect: holding dice means rerolling *fewer*
 dice, which raises Farkle risk — so the advisor weighs the potential combo
@@ -231,7 +233,11 @@ against the odds of surviving the next roll. Enable it in the browser with the
 In code, `Advisor(allow_hold=True, max_held=2)` turns it on. The advisor
 considers holding a group of a single face at a time (a pair toward a triple),
 which is the strategically relevant case; the game engine itself allows holding
-any dice.
+any dice. One modelling note: the advisor evaluates plays that also **bank at
+least one scoring die each roll**, so it doesn't score the "hold only, bank
+nothing this roll" move (that makes the turn a cyclic decision process the exact
+EV solver can't price). Its hold advice is unaffected — it just always grabs an
+available scoring die too.
 
 ## Library API
 

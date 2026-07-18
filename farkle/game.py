@@ -105,16 +105,18 @@ class Turn:
         return legal_keeps(counts_from_dice(self.state.pool), self.rules)
 
     def keep(self, lock, hold=()) -> int:
-        """Lock ``lock`` (a scoring selection) and optionally carry ``hold`` dice
-        forward.  Both are taken from the current pool (held + rolled).  Returns
-        the points scored by ``lock``.  Applies hot dice when all six are locked.
+        """Set aside dice from the current pool (held + rolled): ``lock`` scores
+        and is banked, ``hold`` is carried forward unscored.  ``lock`` may be
+        empty — you may hold non-scoring dice and reroll the rest without banking
+        this roll, as long as the roll itself was valid (see :meth:`roll`).
+        Returns the points scored by ``lock``.  Applies hot dice at six locked.
         """
         if self.state.over:
             raise RuntimeError("turn is already over")
         lock = list(lock)
         hold = list(hold)
         self._validate_keep(lock, hold)
-        score = score_selection(counts_from_dice(lock), self.rules)
+        score = score_selection(counts_from_dice(lock), self.rules) if lock else 0
         assert score is not None  # validated above
 
         self.state.turn_total += score
@@ -154,8 +156,8 @@ class Turn:
     # -- helpers ------------------------------------------------------------
 
     def _validate_keep(self, lock, hold) -> None:
-        if not lock:
-            raise ValueError("must lock at least one scoring die each roll")
+        if not lock and not hold:
+            raise ValueError("must set aside at least one die (lock or hold)")
         pool = list(self.state.pool)
         for face in list(lock) + list(hold):
             if face in pool:
@@ -165,7 +167,7 @@ class Turn:
                     f"die {face} is not available in the pool "
                     f"{sorted(self.state.pool)}"
                 )
-        if score_selection(counts_from_dice(lock), self.rules) is None:
+        if lock and score_selection(counts_from_dice(lock), self.rules) is None:
             raise ValueError(f"{sorted(lock)} is not a fully-scoring selection")
 
 

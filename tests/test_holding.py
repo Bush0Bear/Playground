@@ -65,11 +65,22 @@ class TestTurnHolding:
         pool = counts_from_dice([5, 2, 3, 4])
         assert max_extract(pool) <= max_extract(held)
 
-    def test_must_lock_at_least_one_die(self):
+    def test_hold_only_move_is_allowed(self):
+        # You may hold non-scoring dice and reroll without banking this roll,
+        # as long as the roll was valid (a 1 is present here).
+        turn = Turn(rng=random.Random(2))
+        turn.state.current_roll = [1, 6, 6, 2, 3, 4]
+        turn.keep([], hold=[6, 6])             # lock nothing, hold two 6s
+        assert turn.state.turn_total == 0       # nothing banked
+        assert turn.state.held == [6, 6]
+        assert turn.state.locked_count == 0
+        assert turn.state.dice_in_hand == 4     # rerolling the other four
+
+    def test_must_set_aside_something(self):
         turn = Turn(rng=random.Random(2))
         turn.state.current_roll = [1, 6, 6, 2, 3, 4]
         with pytest.raises(ValueError):
-            turn.keep([], hold=[6, 6])         # locking nothing is illegal
+            turn.keep([], hold=[])             # setting aside nothing is illegal
 
 
 class TestHoldAdvisor:

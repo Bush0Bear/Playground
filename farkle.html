@@ -289,13 +289,18 @@ function renderSelectionInfo() {
   if (S.turn === "rusty") { info.innerHTML = "Rusty is thinking…"; return; }
   if (S.phase === "ready") { info.innerHTML = "Press <b>Roll</b> to roll your "+diceInHand()+" dice."; return; }
   const lock = selFaces("lock"), hold = selFaces("hold");
-  if (lock.length===0 && hold.length===0) { info.innerHTML = "Click the dice you want to set aside."; return; }
-  const sc = lock.length ? scoreSelection(lock) : null;
+  if (lock.length===0 && hold.length===0) { info.innerHTML = "Click dice to set aside — <span class=\"ok\">lock</span> to score, <span class=\"hold-txt\">hold</span> to build."; return; }
   let msg = "";
-  if (lock.length && sc===null) msg = `<span class="no">✗ [${lock.join(" ")}] isn't a valid scoring lock.</span>`;
-  else if (lock.length) msg = `<span class="ok">✓ lock [${lock.join(" ")}] = ${sc}</span>`;
-  else msg = `<span class="no">✗ you must lock at least one scoring die.</span>`;
-  if (hold.length) msg += ` <span class="hold-txt">· holding [${hold.join(" ")}]</span>`;
+  if (lock.length) {
+    const sc = scoreSelection(lock);
+    msg = sc===null
+      ? `<span class="no">✗ [${lock.join(" ")}] isn't a valid scoring lock.</span>`
+      : `<span class="ok">✓ lock [${lock.join(" ")}] = ${sc}</span>`;
+  }
+  if (hold.length) {
+    msg += (msg ? " · " : "") + `<span class="hold-txt">holding [${hold.join(" ")}]</span>`;
+    if (!lock.length) msg += ` <span style="color:var(--muted)">— roll on, banking nothing this roll</span>`;
+  }
   info.innerHTML = msg;
 }
 
@@ -304,10 +309,14 @@ function renderControls() {
   if (S.over || S.turn==="rusty") return;
   if (S.phase === "ready") { c.appendChild(mkBtn("🎲 Roll "+diceInHand()+" dice", "primary", roll)); return; }
   if (S.phase === "rolled") {
-    const lock = selFaces("lock");
-    const valid = lock.length>0 && scoreSelection(lock)!==null;
-    c.appendChild(mkBtn("Set aside & roll again", "go", ()=>setAside(true), !valid));
-    c.appendChild(mkBtn("Set aside & bank", "", ()=>setAside(false), !valid));
+    const lock = selFaces("lock"), hold = selFaces("hold");
+    const lockOk = lock.length === 0 || scoreSelection(lock) !== null;
+    const lockScores = lock.length > 0 && scoreSelection(lock) !== null;
+    const setAsideCount = lock.length + hold.length;
+    const rerollLeft = S.pool.length - setAsideCount;
+    const canRoll = lockOk && setAsideCount >= 1 && rerollLeft >= 1;
+    c.appendChild(mkBtn("Set aside & roll again", "go", ()=>setAside(true), !canRoll));
+    c.appendChild(mkBtn("Set aside & bank", "", ()=>setAside(false), !lockScores));
     const best = mkBtn("Auto: max points", "", autoMax); best.style.marginLeft="8px";
     c.appendChild(best);
   }
@@ -342,15 +351,19 @@ function roll() {
 
 function setAside(rollAgain) {
   const lock = selFaces("lock"), hold = selFaces("hold");
-  const sc = scoreSelection(lock);
-  if (sc===null || lock.length===0) return;
+  const sc = lock.length ? scoreSelection(lock) : 0;
+  if (lock.length && sc === null) return;               // a lock must actually score
+  if (!rollAgain && !(lock.length && sc)) return;       // banking needs a scoring lock
+  if (rollAgain && (lock.length + hold.length === 0)) return;  // set aside something
+
   S.turnTotal += sc;
   S.locked += lock.length;
   S.held = hold;
   let hot = false;
   if (S.locked === 6) { S.locked = 0; S.held = []; hot = true; }
+  const lockNote = lock.length ? `locked [${lock.join(" ")}] (+${sc})` : "locked nothing";
   const holdNote = hold.length ? `, holding [${hold.join(" ")}]` : "";
-  log("you", `locked [${lock.join(" ")}] (+${sc})${holdNote} — turn total ${S.turnTotal}` + (hot?` <span class="tag">HOT DICE!</span>`:""), hot?"hot":"you");
+  log("you", `${lockNote}${holdNote} — turn total ${S.turnTotal}` + (hot?` <span class="tag">HOT DICE!</span>`:""), hot?"hot":"you");
 
   if (!rollAgain) {
     S.you += S.turnTotal;

@@ -20,6 +20,13 @@ It models both household rules:
   roll Farkles unless it adds a *new* score.  To keep the search finite and fast
   the advisor considers holding at most ``max_held`` dice at once (default 2,
   which covers "hold a pair toward a triple"); the game itself allows more.
+
+Advisor assumption: it evaluates plays that **bank at least one scoring die each
+roll** (alongside any dice you hold).  The game rules also permit a "hold only"
+move — carry dice and reroll without banking anything this roll — but that makes
+the turn a cyclic decision process the exact EV solver can't price, so the
+advisor doesn't score it.  Its hold advice (whether/what to hold) is unaffected;
+it simply always takes an available scoring die too.
 """
 
 from __future__ import annotations
