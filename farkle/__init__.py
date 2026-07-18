@@ -11,7 +11,9 @@ pick them all back up and keep the streak going.
 """
 
 from .scoring import (
+    BASIC_RULES,
     DEFAULT_RULES,
+    STANDARD_RULES,
     Keep,
     ScoreRules,
     counts_from_dice,
@@ -28,7 +30,9 @@ from . import strategies
 __version__ = "1.0.0"
 
 __all__ = [
+    "BASIC_RULES",
     "DEFAULT_RULES",
+    "STANDARD_RULES",
     "ScoreRules",
     "Keep",
     "counts_from_dice",

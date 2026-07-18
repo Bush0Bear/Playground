@@ -11,24 +11,39 @@ It also implements the **house "hot dice" rule** we play in my family: whenever
 all six dice have scored, you pick them **all** back up and keep the same streak
 going, rolling the accumulated total forward.
 
-```
-$ python -m farkle advise 1 2 3 4 5 6
+Scoring uses the **most basic model** by default — just 1s, 5s, and
+three-of-a-kind (no straights, pairs, or four/five/six-of-a-kind bonuses) — with
+a fuller variant available if you want it.
 
-Roll: [1] [2] [3] [4] [5] [6]   (turn total so far: 0)
+## Play in your browser
+
+No install needed — open the single-file web version and play against **Rusty**,
+a friendly practice bot, to learn to read the scoring patterns:
+
+**▶ https://raw.githack.com/Bush0Bear/Playground/claude/farkle-game-simulator-eho5pu/farkle.html**
+
+(That link is served straight from this branch by [githack](https://raw.githack.com).
+It shows the score of your current selection live, can highlight which dice can
+score, and narrates every move Rusty makes.)
+
+```
+$ python -m farkle advise 5 5 5 2 3 4
+
+Roll: [2] [3] [4] [5] [5] [5]   (turn total so far: 0)
   keep                     this   turn   bank EV   roll EV  advice
   ----------------------------------------------------------------------
-  [1] [2] [3] [4] [5] [6]   1500   1500      1500      1955  ROLL ON
-  [1]                       100    100       100       404  ROLL ON
-  [5]                        50     50        50       369  ROLL ON
-  [1] [5]                   150    150       150       311  ROLL ON
+  [5] [5] [5]               500    500       500       467  BANK
+  [5]                        50     50        50       342  ROLL ON
+  [5] [5]                   100    100       100       262  ROLL ON
 
-  ==> Best play: keep [1] [2] [3] [4] [5] [6] (+1500), then ROLL AGAIN.
-      Expected final turn score with optimal play: 1955
+  ==> Best play: keep [5] [5] [5] (+500), then BANK NOW.
+      Expected final turn score with optimal play: 500
 ```
 
-> Even a 1500 straight is worth rolling on here — because of the hot-dice rule,
-> setting all six aside earns 1500 *and* hands you six fresh dice, so the
-> expected final score of the turn (1955) beats banking (1500).
+> Three 5s are worth 500. You *could* set them aside and roll three fresh dice,
+> but the expected value of doing that (467) is below just banking the 500 — so
+> the advisor says bank. Keeping only one or two 5s to reroll more dice is worse
+> still.
 
 ## Install
 
@@ -54,6 +69,17 @@ On every roll you see the full option table and the advisor's pick. At the
 prompt, type the face values to keep (e.g. `1 5`), or just press Enter / type
 `best` to take the optimal move, or `q` to quit.
 
+### Practice against Rusty the bot
+
+```bash
+python -m farkle vs                 # play to 4000 against the practice bot
+python -m farkle vs --target 2000   # shorter game
+```
+
+Rusty plays a deliberately simple, predictable strategy and shows every keep he
+makes, so you learn to spot the scoring patterns by watching him. On your own
+turns, type `?` at the prompt for a hint or `best` to auto-play the optimal move.
+
 ### Analyse a single roll
 
 ```bash
@@ -77,14 +103,17 @@ Typical output (hot dice on):
 ```
   strategy            mean   stdev  farkle%    best
   --------------------------------------------------
-  optimal            600.0   618.5   21.6%    5750
-  greedy             429.1   457.1    2.0%    3000
-  bank_at_300        496.9   452.4   20.0%    2500
+  optimal            446.0   345.3   20.5%    2050
+  rusty              385.1   278.4   17.7%    1600
+  greedy             306.8   266.9    2.8%    1600
+  bank_at_300        374.9   282.8   21.7%    1600
   ...
 Farkle probability by dice remaining:
   1 dice: 66.7%   2 dice: 44.4%   3 dice: 27.8%
   4 dice: 15.7%   5 dice:  7.7%   6 dice:  2.3%
 ```
+
+(`rusty` is the practice bot — beatable by design, but a solid benchmark.)
 
 ## How the advisor works
 
@@ -114,8 +143,8 @@ more than a few extra points banked now.
 ## Scoring rules
 
 Farkle scoring differs between households, so every value lives in a
-configurable [`ScoreRules`](farkle/scoring.py) object. The defaults match the
-common commercially published set:
+configurable [`ScoreRules`](farkle/scoring.py) object. The **default is the most
+basic model** (`BASIC_RULES`) — only these combinations score:
 
 | Combination            | Points                                   |
 | ---------------------- | ---------------------------------------- |
@@ -123,19 +152,30 @@ common commercially published set:
 | Each `5`               | 50                                       |
 | Three `1`s             | 1000                                     |
 | Three of a kind (2–6)  | face × 100 (e.g. three `4`s = 400)       |
-| Four of a kind         | 1000                                     |
-| Five of a kind         | 2000                                     |
-| Six of a kind          | 3000                                     |
-| Straight `1-2-3-4-5-6` | 1500                                     |
-| Three pairs            | 1500                                     |
-| Two triplets           | 2500                                     |
-| Four of a kind + pair  | 1500                                     |
+
+Anything else scores nothing on its own. A lone `2`, `3`, `4`, or `6` can't be
+kept, and there is **no** four/five/six-of-a-kind bonus, straight, three-pairs,
+or two-triplet combo. (So four `6`s means you keep three for 600 and reroll the
+fourth; six `1`s is just two triples = 2000.)
 
 The scorer always chooses the **highest-value legal partition** of the dice you
-keep (for instance four `1`s score as three-of-a-kind + a loose `1` = 1100,
-rather than a flat four-of-a-kind 1000). To use your family's exact numbers,
-construct a custom `ScoreRules` and pass it to `Advisor`, `Turn`, and the
-scoring functions.
+keep — for instance four `1`s score as three-of-a-kind + a loose `1` = 1100.
+
+### A fuller variant
+
+If you want the richer combinations, `STANDARD_RULES` adds four-of-a-kind
+(1000), five-of-a-kind (2000), six-of-a-kind (3000), straight (1500), three
+pairs (1500), two triplets (2500), and four-of-a-kind + pair (1500):
+
+```python
+from farkle import Advisor, STANDARD_RULES, score_dice
+score_dice([1, 2, 3, 4, 5, 6], STANDARD_RULES)   # -> 1500 (straight)
+Advisor(rules=STANDARD_RULES)
+```
+
+To use your family's exact numbers, construct your own `ScoreRules` (leave any
+field `None` to disable that combination) and pass it to `Advisor`, `Turn`, and
+the scoring functions.
 
 ### Hot dice
 
@@ -171,13 +211,14 @@ See [`farkle/strategies.py`](farkle/strategies.py) for ready-made strategies
 ## Project layout
 
 ```
+farkle.html       self-contained browser game vs Rusty (served via githack)
 farkle/
   scoring.py      scoring rules + max-partition scorer + legal-keep enumeration
   advisor.py      expected-value optimal-play engine
   game.py         turn/game state, hot-dice rule, referee
-  strategies.py   plug-in strategies for the simulator
+  strategies.py   plug-in strategies incl. the `practice_bot` (Rusty)
   simulate.py     Monte-Carlo per-turn stats and tournaments
-  cli.py          the `play` / `advise` / `sim` command line
+  cli.py          the `play` / `vs` / `advise` / `sim` command line
 tests/            pytest suite for scoring and the advisor
 ```
 

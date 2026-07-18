@@ -74,9 +74,28 @@ class TestPlayTurnIntegration:
 
     def test_turn_hot_dice_reset(self):
         # Force a keep that uses all six dice and confirm the hand resets to 6.
+        # (A straight is not a scoring keep under the basic rules, so use two
+        # triples of 1s and 5s, which score 1000 + 500 = 1500.)
         turn = Turn(hot_dice=True, rng=random.Random(0))
-        turn.state.current_roll = [1, 2, 3, 4, 5, 6]
-        turn.keep([1, 2, 3, 4, 5, 6])
+        turn.state.current_roll = [1, 1, 1, 5, 5, 5]
+        turn.keep([1, 1, 1, 5, 5, 5])
         assert turn.state.dice_in_hand == 6
         assert turn.state.turn_total == 1500
         assert not turn.state.over
+
+
+class TestPracticeBot:
+    def test_bot_makes_legal_moves(self):
+        rng = random.Random(99)
+        scores = [play_turn(strategies.practice_bot, rng=rng) for _ in range(100)]
+        assert all(s >= 0 for s in scores)
+        assert any(s > 0 for s in scores)
+
+    def test_bot_banks_modest_totals(self):
+        # Rusty is conservative: with a decent total and few dice he stops.
+        from farkle.scoring import counts_from_dice, legal_keeps
+        from farkle.game import TurnState
+        state = TurnState(dice_in_hand=2, turn_total=300)
+        keeps = legal_keeps(counts_from_dice([5, 5]))
+        _, roll_again = strategies.practice_bot(state, keeps)
+        assert roll_again is False

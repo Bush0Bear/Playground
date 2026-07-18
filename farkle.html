@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farkle — practice vs Rusty</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #fffdf8; --ink: #2b2620; --muted: #7a7266;
+    --line: #e3ddd0; --accent: #b5432c; --accent2: #2f6f4f; --gold: #c69a3a;
+    --pip: #2b2620; --die: #fffefb; --die-kept: #efe7d6;
+    --sel: #2f6f4f; --score: #2f6f4f; --bad: #b5432c;
+    --shadow: 0 2px 6px rgba(0,0,0,.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1815; --panel: #241f1a; --ink: #ece5d8; --muted: #9a9184;
+      --line: #38312a; --accent: #e0674c; --accent2: #5fbf8c; --gold: #d8b25a;
+      --pip: #241f1a; --die: #ece5d8; --die-kept: #8a8172;
+      --sel: #5fbf8c; --score: #5fbf8c; --bad: #e0674c;
+      --shadow: 0 2px 8px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+  header { text-align: center; margin-bottom: 8px; }
+  h1 { font-size: 1.9rem; margin: 0 0 2px; letter-spacing: .5px; }
+  h1 .dot { color: var(--accent); }
+  .sub { color: var(--muted); font-size: .92rem; margin-bottom: 18px; text-align: center; }
+  .scoreboard {
+    display: flex; gap: 12px; justify-content: center; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .score-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 20px; min-width: 130px; text-align: center; box-shadow: var(--shadow);
+  }
+  .score-card.active { border-color: var(--accent2); box-shadow: 0 0 0 2px var(--accent2) inset; }
+  .score-card .who { font-size: .78rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .score-card .val { font-size: 2rem; font-weight: 700; line-height: 1.1; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px; box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .turn-meta { display: flex; justify-content: space-between; color: var(--muted); font-size: .9rem; margin-bottom: 12px; flex-wrap: wrap; gap: 6px; }
+  .turn-meta b { color: var(--ink); }
+  .dice-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; min-height: 74px; align-items: center; margin: 6px 0 4px; }
+  .die {
+    width: 60px; height: 60px; border-radius: 12px; background: var(--die);
+    display: grid; grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr);
+    padding: 9px; cursor: pointer; box-shadow: var(--shadow); transition: transform .08s, box-shadow .12s;
+    border: 2px solid transparent; position: relative;
+  }
+  .die.static { cursor: default; }
+  .die:not(.static):hover { transform: translateY(-2px); }
+  .die .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--pip); align-self: center; justify-self: center; }
+  .die.selected { border-color: var(--sel); box-shadow: 0 0 0 3px var(--sel) inset, var(--shadow); }
+  .die.hintable { outline: 2px dashed var(--gold); outline-offset: 2px; }
+  .die.kept { background: var(--die-kept); cursor: default; opacity: .8; }
+  /* pip positions per face */
+  .p1 { grid-area: 1/1; } .p2 { grid-area: 1/2; } .p3 { grid-area: 1/3; }
+  .p4 { grid-area: 2/1; } .p5 { grid-area: 2/2; } .p6 { grid-area: 2/3; }
+  .p7 { grid-area: 3/1; } .p8 { grid-area: 3/2; } .p9 { grid-area: 3/3; }
+  .selection-info { text-align: center; min-height: 26px; margin: 8px 0 4px; font-size: 1.05rem; }
+  .selection-info .ok { color: var(--score); font-weight: 600; }
+  .selection-info .no { color: var(--bad); }
+  .controls { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+  button {
+    font: inherit; font-weight: 600; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 18px; background: var(--panel); color: var(--ink); cursor: pointer;
+    transition: transform .06s, background .12s, border-color .12s;
+  }
+  button:hover:not(:disabled) { transform: translateY(-1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.go { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+  .toolbar { display: flex; justify-content: center; gap: 16px; align-items: center; margin-top: 4px; font-size: .9rem; color: var(--muted); flex-wrap: wrap; }
+  .toolbar label { cursor: pointer; user-select: none; }
+  .log { font-size: .88rem; max-height: 190px; overflow-y: auto; }
+  .log h3, .ref h3 { margin: 0 0 8px; font-size: .82rem; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+  .log .entry { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+  .log .entry.you { color: var(--ink); }
+  .log .entry.rusty { color: var(--muted); }
+  .log .entry .tag { font-weight: 700; }
+  .log .entry.hot { color: var(--gold); font-weight: 600; }
+  .log .entry.farkle { color: var(--bad); font-weight: 600; }
+  .ref table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .ref td { padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  .ref td:last-child { text-align: right; font-variant-numeric: tabular-nums; color: var(--score); font-weight: 600; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } .die { width: 52px; height: 52px; } }
+  details summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+  .banner { text-align: center; font-size: 1.15rem; font-weight: 700; padding: 10px; border-radius: 10px; margin-bottom: 12px; }
+  .banner.win { background: color-mix(in srgb, var(--accent2) 18%, transparent); color: var(--accent2); }
+  .banner.lose { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+  .foot { text-align: center; color: var(--muted); font-size: .82rem; margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Farkle<span class="dot">.</span></h1>
+  </header>
+  <div class="sub">Practice reading the dice against <b>Rusty</b>, a friendly bot. Basic scoring · hot-dice rule on.</div>
+
+  <div class="scoreboard">
+    <div class="score-card" id="card-you"><div class="who">You</div><div class="val" id="you-score">0</div></div>
+    <div class="score-card" id="card-rusty"><div class="who">Rusty</div><div class="val" id="rusty-score">0</div></div>
+    <div class="score-card"><div class="who">Target</div><div class="val" id="target">4000</div></div>
+  </div>
+
+  <div id="banner-slot"></div>
+
+  <div class="panel" id="board">
+    <div class="turn-meta">
+      <div>Turn total: <b id="turn-total">0</b></div>
+      <div>Dice in hand: <b id="dice-in-hand">6</b></div>
+    </div>
+    <div class="dice-row" id="dice-row"></div>
+    <div class="selection-info" id="sel-info">Press <b>Roll</b> to start your turn.</div>
+    <div class="controls" id="controls"></div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="hint-toggle"> Highlight the dice that can score</label>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel log">
+      <h3>Play-by-play</h3>
+      <div id="log"></div>
+    </div>
+    <div class="panel ref">
+      <h3>Basic scoring</h3>
+      <table>
+        <tr><td>Each 1</td><td>100</td></tr>
+        <tr><td>Each 5</td><td>50</td></tr>
+        <tr><td>Three 1s</td><td>1000</td></tr>
+        <tr><td>Three 2s</td><td>200</td></tr>
+        <tr><td>Three 3s</td><td>300</td></tr>
+        <tr><td>Three 4s</td><td>400</td></tr>
+        <tr><td>Three 5s</td><td>500</td></tr>
+        <tr><td>Three 6s</td><td>600</td></tr>
+      </table>
+      <details style="margin-top:10px">
+        <summary>How to play</summary>
+        <p style="font-size:.88rem;color:var(--muted)">
+          Roll six dice and click the ones that score to set them aside (you must
+          keep at least one scoring die per roll). Keep rolling the rest to build
+          your total, but if a roll scores <b>nothing</b> you Farkle and lose the
+          whole turn — so bank before you get greedy. Set all six aside and you
+          get <b>hot dice</b>: pick them all back up and keep the streak going.
+        </p>
+      </details>
+      <p style="font-size:.82rem;color:var(--muted);margin:10px 0 0">
+        Only 1s, 5s and three-of-a-kind score in this basic model. A 2, 3, 4 or 6
+        on its own is worth nothing.
+      </p>
+    </div>
+  </div>
+
+  <div class="foot">New game? <button id="new-game" style="padding:5px 12px;font-size:.85rem">Restart</button></div>
+</div>
+
+<script>
+"use strict";
+
+// ---- basic scoring engine (mirrors the Python BASIC_RULES) ----------------
+const SINGLE = {1: 100, 5: 50};
+const THREE = {1: 1000, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600};
+
+function countsOf(dice) {
+  const c = [0,0,0,0,0,0,0];
+  for (const d of dice) c[d]++;
+  return c;
+}
+
+// Max score using every die in `counts`, or null if some die can't score.
+const _memo = new Map();
+function bestPartition(counts) {
+  const key = counts.join(",");
+  if (_memo.has(key)) return _memo.get(key);
+  if (counts.reduce((a,b)=>a+b,0) === 0) { _memo.set(key,0); return 0; }
+  let best = null;
+  const consider = (pts, rem) => {
+    const sub = bestPartition(rem);
+    if (sub !== null) { const t = pts + sub; if (best === null || t > best) best = t; }
+  };
+  for (let f = 1; f <= 6; f++) {
+    if (counts[f] >= 3) {                 // three of a kind (basic: only size 3)
+      const rem = counts.slice(); rem[f] -= 3;
+      consider(THREE[f], rem);
+    }
+  }
+  for (const f of [1,5]) {                 // loose singles
+    if (counts[f] >= 1) { const rem = counts.slice(); rem[f] -= 1; consider(SINGLE[f], rem); }
+  }
+  _memo.set(key, best);
+  return best;
+}
+
+function scoreSelection(dice) {
+  if (dice.length === 0) return null;
+  return bestPartition(countsOf(dice));
+}
+
+// A die at face f can take part in some scoring combo given the whole roll.
+function scoringFaces(rollCounts) {
+  const faces = new Set();
+  for (let f = 1; f <= 6; f++) {
+    if (f === 1 || f === 5) { if (rollCounts[f] > 0) faces.add(f); }
+    else if (rollCounts[f] >= 3) faces.add(f);
+  }
+  return faces;
+}
+
+function hasScore(dice) { return scoringFaces(countsOf(dice)).size > 0; }
+
+// Highest-scoring keep from a roll (used by Rusty): keep every scoring die.
+function maxKeep(dice) {
+  const c = countsOf(dice);
+  const keep = [];
+  for (let f = 1; f <= 6; f++) {
+    if (f === 1 || f === 5) { for (let i=0;i<c[f];i++) keep.push(f); }
+    else { const triples = Math.floor(c[f]/3)*3; for (let i=0;i<triples;i++) keep.push(f); }
+  }
+  return { dice: keep, score: scoreSelection(keep) || 0, remaining: dice.length - keep.length };
+}
+
+// ---- Rusty the practice bot ----------------------------------------------
+// Deliberately simple and predictable so you can learn by watching him.
+function rustyDecision(turnTotal, dice) {
+  const keep = maxKeep(dice);
+  const wouldBe = turnTotal + keep.score;
+  let left = keep.remaining === 0 ? 6 : keep.remaining;  // hot dice
+  const rollAgain = wouldBe < 350 && left >= 3;
+  return { keep, rollAgain };
+}
+
+// ---- game state -----------------------------------------------------------
+const TARGET = 4000;
+let S;
+function newGame() {
+  S = { you: 0, rusty: 0, turnTotal: 0, diceInHand: 6, rolled: [], selected: new Set(),
+        phase: "ready", turn: "you", over: false };
+  document.getElementById("banner-slot").innerHTML = "";
+  logClear();
+  render();
+}
+
+function rnd(n) { const a = []; for (let i=0;i<n;i++) a.push(1 + Math.floor(Math.random()*6)); return a; }
+
+// ---- rendering ------------------------------------------------------------
+const PIPS = {1:[5],2:[1,9],3:[1,5,9],4:[1,3,7,9],5:[1,3,5,7,9],6:[1,3,4,6,7,9]};
+function dieEl(face, opts={}) {
+  const d = document.createElement("div");
+  d.className = "die" + (opts.static ? " static" : "");
+  if (opts.selected) d.className += " selected";
+  if (opts.hintable) d.className += " hintable";
+  if (opts.kept) d.className += " kept";
+  for (const p of PIPS[face]) { const s = document.createElement("span"); s.className = "pip p"+p; d.appendChild(s); }
+  if (opts.onClick) d.addEventListener("click", opts.onClick);
+  return d;
+}
+
+function render() {
+  document.getElementById("you-score").textContent = S.you;
+  document.getElementById("rusty-score").textContent = S.rusty;
+  document.getElementById("target").textContent = TARGET;
+  document.getElementById("turn-total").textContent = S.turnTotal;
+  document.getElementById("dice-in-hand").textContent = S.diceInHand;
+  document.getElementById("card-you").classList.toggle("active", S.turn==="you" && !S.over);
+  document.getElementById("card-rusty").classList.toggle("active", S.turn==="rusty" && !S.over);
+
+  const row = document.getElementById("dice-row");
+  row.innerHTML = "";
+  const hint = document.getElementById("hint-toggle").checked;
+  const scoreFaces = hint ? scoringFaces(countsOf(S.rolled)) : new Set();
+
+  if (S.phase === "rolled") {
+    S.rolled.forEach((face, i) => {
+      row.appendChild(dieEl(face, {
+        selected: S.selected.has(i),
+        hintable: hint && scoreFaces.has(face) && !S.selected.has(i),
+        onClick: () => toggleSelect(i),
+      }));
+    });
+  }
+  renderControls();
+  renderSelectionInfo();
+}
+
+function renderSelectionInfo() {
+  const info = document.getElementById("sel-info");
+  if (S.over) { info.innerHTML = "Game over — press <b>Restart</b> to play again."; return; }
+  if (S.turn === "rusty") { info.innerHTML = "Rusty is thinking…"; return; }
+  if (S.phase === "ready") { info.innerHTML = "Press <b>Roll</b> to roll your "+S.diceInHand+" dice."; return; }
+  const sel = [...S.selected].map(i => S.rolled[i]);
+  if (sel.length === 0) { info.innerHTML = "Click the dice you want to set aside."; return; }
+  const sc = scoreSelection(sel);
+  if (sc === null) info.innerHTML = `<span class="no">✗ [${sel.join(" ")}] — that selection includes a die that doesn't score.</span>`;
+  else info.innerHTML = `<span class="ok">✓ [${sel.join(" ")}] = ${sc} points</span>`;
+}
+
+function renderControls() {
+  const c = document.getElementById("controls");
+  c.innerHTML = "";
+  if (S.over) return;
+  if (S.turn === "rusty") return;
+
+  if (S.phase === "ready") {
+    c.appendChild(mkBtn("🎲 Roll "+S.diceInHand+" dice", "primary", roll));
+    return;
+  }
+  if (S.phase === "rolled") {
+    const sel = [...S.selected].map(i => S.rolled[i]);
+    const valid = sel.length > 0 && scoreSelection(sel) !== null;
+    c.appendChild(mkBtn("Set aside & roll again", "go", () => setAside(true), !valid));
+    c.appendChild(mkBtn("Set aside & bank", "", () => setAside(false), !valid));
+    const best = mkBtn("Show me the best keep", "", showBest);
+    best.style.marginLeft = "8px";
+    c.appendChild(best);
+  }
+}
+function mkBtn(label, cls, fn, disabled) {
+  const b = document.createElement("button");
+  b.textContent = label; if (cls) b.className = cls; if (disabled) b.disabled = true;
+  b.addEventListener("click", fn); return b;
+}
+
+// ---- interactions ---------------------------------------------------------
+function toggleSelect(i) {
+  if (S.selected.has(i)) S.selected.delete(i); else S.selected.add(i);
+  render();
+}
+
+function roll() {
+  S.rolled = rnd(S.diceInHand);
+  S.selected = new Set();
+  S.phase = "rolled";
+  if (!hasScore(S.rolled)) {
+    log(`you`, `rolled [${S.rolled.join(" ")}] — <span class="tag">FARKLE!</span> lost ${S.turnTotal}`, "farkle");
+    S.turnTotal = 0;
+    endTurn("you");
+    return;
+  }
+  render();
+}
+
+function setAside(rollAgain) {
+  const sel = [...S.selected].map(i => S.rolled[i]);
+  const sc = scoreSelection(sel);
+  if (sc === null || sel.length === 0) return;
+  S.turnTotal += sc;
+  S.diceInHand -= sel.length;
+  let hot = false;
+  if (S.diceInHand === 0) { S.diceInHand = 6; hot = true; }
+  log("you", `kept [${sel.join(" ")}] (+${sc}) — turn total ${S.turnTotal}` + (hot ? ` <span class="tag">HOT DICE!</span>` : ""), hot ? "hot" : "you");
+  S.selected = new Set();
+
+  if (rollAgain) { S.phase = "ready"; render(); roll(); }
+  else { S.you += S.turnTotal; log("you", `<span class="tag">BANKED ${S.turnTotal}</span> — you now have ${S.you}`, "you"); S.turnTotal = 0; endTurn("you"); }
+}
+
+function showBest() {
+  const best = maxKeep(S.rolled);
+  // preselect the best keep visually
+  S.selected = new Set();
+  const need = countsOf(best.dice);
+  const taken = [0,0,0,0,0,0,0];
+  S.rolled.forEach((f, i) => { if (taken[f] < need[f]) { S.selected.add(i); taken[f]++; } });
+  render();
+  document.getElementById("sel-info").innerHTML =
+    `<span class="ok">Rusty's pick: [${best.dice.join(" ")}] = ${best.score}.</span> ` +
+    `Adjust if you like, then set aside.`;
+}
+
+// ---- turn flow ------------------------------------------------------------
+function endTurn(who) {
+  S.turnTotal = 0;
+  S.diceInHand = 6;
+  S.phase = "ready";
+  S.rolled = [];
+  S.selected = new Set();
+  if (S.you >= TARGET || S.rusty >= TARGET) { finish(); return; }
+  if (who === "you") { S.turn = "rusty"; render(); setTimeout(rustyTurn, 700); }
+  else { S.turn = "you"; render(); }
+}
+
+function rustyTurn() {
+  S.turn = "rusty"; S.turnTotal = 0; S.diceInHand = 6;
+  render();
+  stepRusty();
+}
+
+function stepRusty() {
+  const dice = rnd(S.diceInHand);
+  S.rolled = dice; S.selected = new Set(); S.phase = "rolled";
+  render();
+  if (!hasScore(dice)) {
+    log("rusty", `rolled [${dice.join(" ")}] — <span class="tag">FARKLE!</span> lost ${S.turnTotal}`, "farkle");
+    S.turnTotal = 0; endTurn("rusty"); return;
+  }
+  const { keep, rollAgain } = rustyDecision(S.turnTotal, dice);
+  S.turnTotal += keep.score;
+  S.diceInHand -= keep.dice.length;
+  let hot = false;
+  if (S.diceInHand === 0) { S.diceInHand = 6; hot = true; }
+  log("rusty", `rolled [${dice.join(" ")}] → keeps [${keep.dice.join(" ")}] (+${keep.score}) — total ${S.turnTotal}` + (hot ? ` <span class="tag">HOT!</span>` : ""), hot ? "hot" : "rusty");
+  // show what he kept, briefly
+  S.selected = new Set();
+  const need = countsOf(keep.dice); const taken=[0,0,0,0,0,0,0];
+  dice.forEach((f,i)=>{ if (taken[f]<need[f]){ S.selected.add(i); taken[f]++; }});
+  render();
+
+  if (rollAgain || hot && (S.turnTotal < 350)) {
+    setTimeout(stepRusty, 850);
+  } else {
+    S.rusty += S.turnTotal;
+    log("rusty", `<span class="tag">BANKS ${S.turnTotal}</span> — Rusty now has ${S.rusty}`, "rusty");
+    setTimeout(() => endTurn("rusty"), 500);
+  }
+}
+
+function finish() {
+  S.over = true; S.turn = null;
+  const slot = document.getElementById("banner-slot");
+  let msg, cls;
+  if (S.you > S.rusty) { msg = `🎉 You win, ${S.you} to ${S.rusty}!`; cls = "win"; }
+  else if (S.rusty > S.you) { msg = `Rusty wins, ${S.rusty} to ${S.you}. Run it back!`; cls = "lose"; }
+  else { msg = `Dead tie at ${S.you}.`; cls = "win"; }
+  slot.innerHTML = `<div class="banner ${cls}">${msg}</div>`;
+  render();
+}
+
+// ---- log ------------------------------------------------------------------
+function log(who, html, cls) {
+  const el = document.getElementById("log");
+  const div = document.createElement("div");
+  div.className = "entry " + (cls || who);
+  const name = who === "you" ? "You" : "Rusty";
+  div.innerHTML = `<span class="tag">${name}:</span> ${html.replace(/<span class="tag">You:<\/span> /,"")}`;
+  el.prepend(div);
+}
+function logClear() { document.getElementById("log").innerHTML = ""; }
+
+// ---- wire up --------------------------------------------------------------
+document.getElementById("hint-toggle").addEventListener("change", render);
+document.getElementById("new-game").addEventListener("click", newGame);
+newGame();
+</script>
+</body>
+</html>

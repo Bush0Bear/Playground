@@ -33,6 +33,26 @@ def bank_at(threshold: int):
     return strategy
 
 
+def practice_bot(state: TurnState, keeps: List[Keep]) -> Tuple[List[int], bool]:
+    """"Rusty" — a friendly, predictable practice opponent.
+
+    Rusty is deliberately simple so you can learn to read the dice by watching
+    him play, rather than being crushed by an optimiser:
+
+    * he always sets aside the single highest-scoring combination he can see;
+    * he keeps rolling while he has plenty of dice and not much banked, and
+      plays it safe once the turn is worth a bit or he is down to few dice.
+
+    Concretely he banks once his turn total reaches ~350, or once he would be
+    left rolling only one or two dice (where Farkling is likely).
+    """
+    best = max(keeps, key=lambda k: k.score)
+    would_be = state.turn_total + best.score
+    dice_left = best.remaining if best.remaining > 0 else 6  # hot dice
+    roll_again = would_be < 350 and dice_left >= 3
+    return list(best.dice), roll_again
+
+
 def optimal(
     rules: ScoreRules = DEFAULT_RULES, hot_dice: bool = True
 ):

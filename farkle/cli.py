@@ -124,9 +124,15 @@ def _prompt_keep(turn: Turn, advisor: Advisor):
     keeps = turn.legal_keeps()
     while True:
         raw = input("  Your keep (e.g. '1 5', 'best' for optimal, "
-                    "'q' to quit): ").strip().lower()
+                    "'?' for a hint, 'q' to quit): ").strip().lower()
         if raw in ("q", "quit", "exit"):
             return None
+        if raw == "?":
+            scoring_faces = sorted({f for k in keeps for f in k.dice})
+            print(f"    Hint: the dice that can score here are "
+                  f"{_fmt_dice(scoring_faces)}. "
+                  f"Highest single keep is worth {keeps[0].score}.")
+            continue
         if raw in ("", "best", "b"):
             decision = advisor.recommend(turn.state.current_roll,
                                          turn.state.turn_total)
@@ -155,6 +161,103 @@ def _ask_roll_again(turn: Turn) -> bool:
         print("  ! Please answer y or n.")
 
 
+# --- versus-bot mode -------------------------------------------------------
+
+def _bot_take_turn(name: str, rules, hot_dice: bool, rng) -> int:
+    """Play one turn for the practice bot, narrating each decision so the human
+    can learn to spot the scoring patterns."""
+    turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
+    print(f"\n  {name}'s turn:")
+    while not turn.state.over:
+        turn.roll()
+        if turn.state.farkled:
+            print(f"    rolls {_fmt_dice(turn.state.current_roll)} -> FARKLE! "
+                  f"{name} scores 0 this turn.")
+            return 0
+        full_roll = list(turn.state.current_roll)
+        keeps = turn.legal_keeps()
+        dice_to_keep, roll_again = strategies.practice_bot(turn.state, keeps)
+        score = score_of(dice_to_keep, rules)
+        dice_before = turn.state.dice_in_hand
+        turn.keep(dice_to_keep)
+        note = ""
+        if hot_dice and turn.state.dice_in_hand == 6 and \
+                len(dice_to_keep) == dice_before:
+            note = "  (HOT DICE!)"
+        print(f"    rolls {_fmt_dice(full_roll)}"
+              f" -> keeps {_fmt_dice(dice_to_keep)} (+{score}), "
+              f"turn total {turn.state.turn_total}{note}")
+        if not roll_again or turn.state.dice_in_hand == 0:
+            return turn.bank()
+    return turn.state.turn_total
+
+
+def score_of(dice, rules):
+    from .scoring import score_selection
+    return score_selection(counts_from_dice(dice), rules)
+
+
+def versus(args) -> None:
+    rules = DEFAULT_RULES
+    hot_dice = not args.no_hot_dice
+    rng = random.Random(args.seed) if args.seed is not None else random.Random()
+    advisor = Advisor(rules=rules, hot_dice=hot_dice)
+    bot_name = "Rusty"
+
+    print("=" * 74)
+    print(f"  FARKLE — you vs {bot_name} (a friendly practice bot)")
+    print(f"  Hot-dice rule: {'ON' if hot_dice else 'OFF'}   "
+          f"first to {args.target} wins")
+    print(f"  Tip: watch {bot_name}'s keeps to learn the scoring patterns. "
+          f"Use '?' at the prompt for a hint.")
+    print("=" * 74)
+
+    you, bot = 0, 0
+    while you < args.target and bot < args.target:
+        print(f"\n===== YOUR TURN (you {you} — {bot_name} {bot}) =====")
+        you += _human_turn(advisor, rules, hot_dice, rng)
+        print(f"  You now have {you}.")
+        if you >= args.target:
+            break
+        bot += _bot_take_turn(bot_name, rules, hot_dice, rng)
+        print(f"  {bot_name} now has {bot}.")
+
+    print("\n" + "=" * 74)
+    if you >= args.target and you > bot:
+        print(f"  You win {you} to {bot}! ")
+    elif bot >= args.target and bot > you:
+        print(f"  {bot_name} wins {bot} to {you}. Better luck next time!")
+    else:
+        print(f"  Final score — you {you}, {bot_name} {bot}.")
+    print("=" * 74)
+
+
+def _human_turn(advisor: Advisor, rules, hot_dice: bool, rng) -> int:
+    """Run one interactive turn for the human player; return points banked."""
+    turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
+    while not turn.state.over:
+        turn.roll()
+        if turn.state.farkled:
+            print(f"\nRoll: {_fmt_dice(turn.state.current_roll)}")
+            print("  >>> FARKLE! You lose this turn's points.")
+            return 0
+        _report(advisor, turn.state.current_roll, turn.state.turn_total)
+        choice = _prompt_keep(turn, advisor)
+        if choice is None:
+            raise SystemExit("\nThanks for playing!")
+        dice_before = turn.state.dice_in_hand
+        turn.keep(choice)
+        if hot_dice and turn.state.dice_in_hand == 6 and \
+                len(choice) == dice_before:
+            print("  *** HOT DICE! Pick up all six and keep the streak. ***")
+        if turn.state.dice_in_hand == 0:
+            print("  All six scored — banking automatically.")
+            return turn.bank()
+        if not _ask_roll_again(turn):
+            return turn.bank()
+    return turn.state.turn_total
+
+
 # --- advise mode -----------------------------------------------------------
 
 def advise(args) -> None:
@@ -174,6 +277,7 @@ def sim(args) -> None:
     rules = DEFAULT_RULES
     catalog = {
         "optimal": strategies.optimal(rules, hot_dice),
+        "rusty": strategies.practice_bot,
         "greedy": strategies.greedy_max_points,
         "bank_at_300": strategies.bank_at(300),
         "bank_at_500": strategies.bank_at(500),
@@ -221,6 +325,11 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--target", type=int, default=10000)
     pp.add_argument("--seed", type=int, default=None)
     pp.set_defaults(func=play)
+
+    pv = sub.add_parser("vs", help="play against Rusty, the practice bot")
+    pv.add_argument("--target", type=int, default=4000)
+    pv.add_argument("--seed", type=int, default=None)
+    pv.set_defaults(func=versus)
 
     pa = sub.add_parser("advise", help="analyse a single roll")
     pa.add_argument("dice", nargs="*", type=int,

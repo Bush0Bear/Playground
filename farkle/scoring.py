@@ -47,7 +47,13 @@ def dice_from_counts(counts: Counts) -> List[int]:
 
 @dataclass(frozen=True)
 class ScoreRules:
-    """All the tunable numbers that define a Farkle scoring variant."""
+    """All the tunable numbers that define a Farkle scoring variant.
+
+    Only ``single`` and ``three_of_a_kind`` are always active.  Every other
+    field is optional: leave it ``None`` to disable that combination.  This lets
+    the default rules be the *most basic* model (just 1s, 5s, and three of a
+    kind) while a richer variant can switch the extras on.
+    """
 
     single: Dict[int, int] = field(
         default_factory=lambda: {1: 100, 5: 50}
@@ -56,16 +62,17 @@ class ScoreRules:
     three_of_a_kind: Dict[int, int] = field(
         default_factory=lambda: {1: 1000, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600}
     )
-    four_of_a_kind: int = 1000
-    five_of_a_kind: int = 2000
-    six_of_a_kind: int = 3000
-    straight: int = 1500          # 1-2-3-4-5-6
-    three_pairs: int = 1500
-    two_triplets: int = 2500
-    four_plus_pair: int = 1500    # four-of-a-kind + a pair
+    four_of_a_kind: Optional[int] = None
+    five_of_a_kind: Optional[int] = None
+    six_of_a_kind: Optional[int] = None
+    straight: Optional[int] = None          # 1-2-3-4-5-6
+    three_pairs: Optional[int] = None
+    two_triplets: Optional[int] = None
+    four_plus_pair: Optional[int] = None    # four-of-a-kind + a pair
 
     def n_of_a_kind(self, face: int, n: int) -> Optional[int]:
-        """Score for exactly ``n`` dice of ``face`` (n in 3..6), or None."""
+        """Score for exactly ``n`` dice of ``face`` (n in 3..6), or None when
+        that group size is not a scoring combination in this variant."""
         if n == 3:
             return self.three_of_a_kind[face]
         if n == 4:
@@ -77,7 +84,23 @@ class ScoreRules:
         return None
 
 
-DEFAULT_RULES = ScoreRules()
+# The most basic model: single 1s and 5s, plus three-of-a-kind.  No
+# four/five/six-of-a-kind bonuses, straights, pairs, or two-triplet combos.
+BASIC_RULES = ScoreRules()
+
+# A fuller, commonly published variant with the extra combinations switched on.
+STANDARD_RULES = ScoreRules(
+    four_of_a_kind=1000,
+    five_of_a_kind=2000,
+    six_of_a_kind=3000,
+    straight=1500,
+    three_pairs=1500,
+    two_triplets=2500,
+    four_plus_pair=1500,
+)
+
+# The default used everywhere unless a caller passes their own rules.
+DEFAULT_RULES = BASIC_RULES
 
 
 # --- core partition scorer -------------------------------------------------
@@ -106,7 +129,7 @@ def _best_partition(counts: Counts, rules_id: int) -> Optional[int]:
                 best = total
 
     # Straight 1-6 (consumes exactly one of each face).
-    if all(counts[f] >= 1 for f in range(1, 7)):
+    if rules.straight is not None and all(counts[f] >= 1 for f in range(1, 7)):
         rem = list(counts)
         for f in range(1, 7):
             rem[f] -= 1
@@ -187,13 +210,14 @@ def score_selection(counts: Counts, rules: ScoreRules = DEFAULT_RULES) -> Option
     if base is not None:
         candidates.append(base)
 
-    # Whole-hand combos only apply to a full set of six kept dice.
+    # Whole-hand combos only apply to a full set of six kept dice, and only
+    # when the variant enables them.
     if sum(counts) == 6:
-        if _is_three_pairs(counts):
+        if rules.three_pairs is not None and _is_three_pairs(counts):
             candidates.append(rules.three_pairs)
-        if _is_two_triplets(counts):
+        if rules.two_triplets is not None and _is_two_triplets(counts):
             candidates.append(rules.two_triplets)
-        if _is_four_plus_pair(counts):
+        if rules.four_plus_pair is not None and _is_four_plus_pair(counts):
             candidates.append(rules.four_plus_pair)
 
     return max(candidates) if candidates else None
