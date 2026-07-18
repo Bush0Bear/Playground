@@ -15,6 +15,12 @@ Scoring uses the **most basic model** by default — just 1s, 5s, and
 three-of-a-kind (no straights, pairs, or four/five/six-of-a-kind bonuses) — with
 a fuller variant available if you want it.
 
+There is also an optional **hold rule** (`--hold`): set aside *non-scoring* dice
+to build toward a combo on a later roll (e.g. hold two 6s hoping to roll a
+third). The advisor fully models it — and it turns out holding a pair toward a
+triple is often strongly +EV, because rerolling toward a 42%-ish completion beats
+banking a lone 50.
+
 ## Play in your browser
 
 No install needed — open the single-file web version and play against **Rusty**,
@@ -74,6 +80,7 @@ prompt, type the face values to keep (e.g. `1 5`), or just press Enter / type
 ```bash
 python -m farkle vs                 # play to 4000 against the practice bot
 python -m farkle vs --target 2000   # shorter game
+python -m farkle --hold vs          # ...with the hold rule enabled
 ```
 
 Rusty plays a deliberately simple, predictable strategy and shows every keep he
@@ -85,10 +92,16 @@ turns, type `?` at the prompt for a hint or `best` to auto-play the optimal move
 ```bash
 python -m farkle advise 1 1 3 4 5 6
 python -m farkle advise 5 2 3 4 6 2 --turn-total 2000   # with points at risk
+
+# with the hold rule — the advisor weighs holding dice toward a combo:
+python -m farkle --hold advise 5 6 6 2 3 4
+python -m farkle --hold advise 6 1 2 --held 6 6 --turn-total 50  # mid-build
 ```
 
 The `--turn-total` matters: the more you have banked this turn, the more a
-Farkle costs you, so the advisor gets more conservative about rolling on.
+Farkle costs you, so the advisor gets more conservative about rolling on. With
+`--hold`, pass `--held` to describe dice you're already carrying, and the option
+table gains a `hold` column showing what to set aside toward a combo.
 
 ### Simulate / compare strategies
 
@@ -117,24 +130,28 @@ Farkle probability by dice remaining:
 
 ## How the advisor works
 
-The advisor solves the turn as a small Markov decision process. Let
-`V(n, T)` be the expected final score of a turn where you are about to roll `n`
-dice with `T` points banked so far. For each possible roll it considers every
-legal way to set dice aside, and for each of those the choice to **bank** (`T`
-becomes final) or **roll on** (recurse into `V`), always taking the option with
-the highest expected value:
+The advisor solves the turn as a small Markov decision process over states
+`(locked, held, T)`: how many dice have already scored, which non-scoring dice
+you're carrying (with the hold rule), and the turn total banked so far. For each
+possible roll it considers every legal way to lock dice — and, with holding,
+which dice to carry forward — then the choice to **bank** or **roll on**, always
+taking the option with the highest expected value:
 
 ```
-V(n, T) = Σ  P(roll) · max over legal keeps of
-                 max( T + keep,                 # bank now
-                      V(dice_left, T + keep) )  # roll on
+V(locked, held, T) = Σ  P(roll) · max over (lock, hold) of
+                          max( T + lock,                          # bank now
+                               V(locked+|lock|, hold, T + lock) ) # roll on
 ```
 
-A Farkle (no scoring dice) contributes `0` — you lose everything banked that
-turn. Hot dice are modelled by resetting `dice_left` to 6 whenever a keep uses
-the last die. The recursion is memoised on `(n, T)` and terminates because a
-large enough turn total is never worth risking (banking dominates), which also
-keeps the hot-dice streak finite.
+A Farkle contributes `0` — you lose everything banked that turn. With holding, a
+roll Farkles unless it adds a *new* score beyond what the held dice already
+offered. Hot dice reset to a fresh six whenever the sixth die is locked. The
+recursion is memoised and terminates because a large enough turn total is never
+worth risking (banking dominates), which keeps the hot-dice streak finite.
+
+Both the no-hold and hold advisors are **validated by Monte-Carlo**: simulating
+tens of thousands of turns under the computed policy reproduces the computed EV
+to within noise (446.6 vs 446.7 without holding; 523.1 vs 523.3 with it).
 
 This is why the advisor sometimes recommends keeping **fewer** dice than the
 maximum-scoring selection: holding back dice with re-roll potential can be worth
@@ -185,6 +202,30 @@ your turn total carried forward. A Farkle at any point still wipes the turn.
 Turn it off with `--no-hot-dice` (or `hot_dice=False` in the API) to play the
 standard game.
 
+### Hold rule (`--hold`)
+
+An optional house rule: instead of only setting aside *scoring* dice, you may
+also **hold** non-scoring dice and carry them, unscored, into your next roll to
+build a combo (classically, hold two 6s and try to roll a third for 600). The
+rules:
+
+- Held dice keep their faces and join whatever you roll next.
+- **Every roll must produce a *new* score** — a freshly rolled 1/5, or the
+  completion of a combo you're holding. If the new dice add nothing, it's a
+  **Farkle** and the turn is lost.
+- You must still lock at least one scoring die each roll (you can't hold
+  everything and stall).
+
+The tension is exactly what you'd expect: holding dice means rerolling *fewer*
+dice, which raises Farkle risk — so the advisor weighs the potential combo
+against the odds of surviving the next roll. Enable it in the browser with the
+"Hold rule" toggle, or on the CLI with the global `--hold` flag.
+
+In code, `Advisor(allow_hold=True, max_held=2)` turns it on. The advisor
+considers holding a group of a single face at a time (a pair toward a triple),
+which is the strategically relevant case; the game engine itself allows holding
+any dice.
+
 ## Library API
 
 ```python
@@ -203,6 +244,13 @@ turn = Turn(hot_dice=True)
 turn.roll()
 turn.keep([1, 5])
 turn.bank()
+
+# Hold rule: lock the 5, hold two 6s to build three-of-a-kind.
+hold_advisor = Advisor(allow_hold=True, max_held=2)
+d = hold_advisor.recommend([5, 6, 6, 2, 3, 4], turn_total=0)
+d.keep.dice   # (5,)      -> lock these
+d.hold        # (6, 6)    -> carry these forward
+turn.keep([5], hold=[6, 6])
 ```
 
 See [`farkle/strategies.py`](farkle/strategies.py) for ready-made strategies

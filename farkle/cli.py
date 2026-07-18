@@ -2,15 +2,19 @@
 
 Modes:
   play      Play through turns yourself; the advisor shows the optimal move.
+  vs        Play against Rusty, a friendly practice bot.
   advise    Analyse a single roll you type in and print the best action.
   sim       Monte-Carlo a strategy or run a strategy tournament.
+
+Pass --hold to enable the "hold" house rule, where you may set aside
+non-scoring dice to build toward a combo on a later roll.
 """
 
 from __future__ import annotations
 
 import argparse
 import random
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .advisor import Advisor, Decision, farkle_probability
 from .game import Turn
@@ -22,132 +26,100 @@ from .simulate import evaluate_strategy, tournament
 # --- pretty printing -------------------------------------------------------
 
 def _fmt_dice(dice) -> str:
-    return " ".join(f"[{d}]" for d in sorted(dice))
+    return " ".join(f"[{d}]" for d in sorted(dice)) if dice else "—"
 
 
-def _print_decision_table(decisions: List[Decision], top: int = 6) -> None:
-    print(f"  {'keep':<22}{'this':>7}{'turn':>7}{'bank EV':>10}"
-          f"{'roll EV':>10}  advice")
-    print("  " + "-" * 70)
-    for d in decisions[:top]:
-        keep_str = _fmt_dice(d.keep.dice)
-        advice = "ROLL ON" if d.roll_again else "BANK"
-        marker = ""
-        print(
-            f"  {keep_str:<22}{d.keep.score:>7}{d.turn_total_after:>7}"
-            f"{d.ev_if_bank:>10.0f}{d.ev_if_roll:>10.0f}  {advice}{marker}"
-        )
+def _print_decision_table(decisions: List[Decision], hold: bool,
+                          top: int = 8) -> None:
+    if hold:
+        print(f"  {'lock':<16}{'hold':<12}{'this':>6}{'turn':>7}"
+              f"{'bank EV':>9}{'roll EV':>9}  advice")
+        print("  " + "-" * 74)
+        for d in decisions[:top]:
+            advice = f"ROLL {d.reroll_count}" if d.roll_again else "BANK"
+            print(
+                f"  {_fmt_dice(d.keep.dice):<16}{_fmt_dice(d.hold):<12}"
+                f"{d.keep.score:>6}{d.turn_total_after:>7}"
+                f"{d.ev_if_bank:>9.0f}{d.ev_if_roll:>9.0f}  {advice}"
+            )
+    else:
+        print(f"  {'keep':<22}{'this':>7}{'turn':>7}{'bank EV':>10}"
+              f"{'roll EV':>10}  advice")
+        print("  " + "-" * 70)
+        for d in decisions[:top]:
+            advice = "ROLL ON" if d.roll_again else "BANK"
+            print(
+                f"  {_fmt_dice(d.keep.dice):<22}{d.keep.score:>7}"
+                f"{d.turn_total_after:>7}{d.ev_if_bank:>10.0f}"
+                f"{d.ev_if_roll:>10.0f}  {advice}"
+            )
 
 
-def _report(advisor: Advisor, dice, turn_total: int) -> Optional[Decision]:
-    counts = counts_from_dice(dice)
-    keeps = legal_keeps(counts, advisor.rules)
-    print(f"\nRoll: {_fmt_dice(dice)}   (turn total so far: {turn_total})")
-    if not keeps:
-        print("  >>> FARKLE! No scoring dice. Turn over, you lose "
+def _report(advisor: Advisor, dice, turn_total: int,
+            held=()) -> Optional[Decision]:
+    hold_note = f"   holding: {_fmt_dice(held)}" if held else ""
+    print(f"\nRoll: {_fmt_dice(dice)}   (turn total: {turn_total}){hold_note}")
+    decisions = advisor.all_options(dice, turn_total, held)
+    if not decisions:
+        print("  >>> FARKLE! No new score. Turn over, you lose "
               f"{turn_total} points.")
         return None
-    decisions = advisor.all_options(dice, turn_total)
-    _print_decision_table(decisions)
+    _print_decision_table(decisions, hold=advisor.allow_hold)
     best = decisions[0]
-    action = "ROLL AGAIN" if best.roll_again else "BANK NOW"
-    print(f"\n  ==> Best play: keep {_fmt_dice(best.keep.dice)} "
-          f"(+{best.keep.score}), then {action}.")
+    action = f"ROLL the {best.reroll_count} remaining" if best.roll_again \
+        else "BANK NOW"
+    hold_txt = f", hold {_fmt_dice(best.hold)}" if best.hold else ""
+    print(f"\n  ==> Best play: lock {_fmt_dice(best.keep.dice)} "
+          f"(+{best.keep.score}){hold_txt}, then {action}.")
     print(f"      Expected final turn score with optimal play: {best.ev:.0f}")
     return best
 
 
-# --- play mode -------------------------------------------------------------
+# --- shared interactive turn -----------------------------------------------
 
-def play(args) -> None:
-    rules = DEFAULT_RULES
-    hot_dice = not args.no_hot_dice
-    rng = random.Random(args.seed) if args.seed is not None else random.Random()
-    advisor = Advisor(rules=rules, hot_dice=hot_dice)
-
-    print("=" * 74)
-    print("  FARKLE — interactive play")
-    print(f"  Hot-dice rule: {'ON' if hot_dice else 'OFF'}   "
-          f"(reach {args.target} to win)")
-    print("=" * 74)
-
-    total_score = 0
-    while total_score < args.target:
-        print(f"\n--- New turn (game score: {total_score}) ---")
-        turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
-        while not turn.state.over:
-            turn.roll()
-            if turn.state.farkled:
-                print(f"\nRoll: {_fmt_dice(turn.state.current_roll)}")
-                print("  >>> FARKLE! No scoring dice. You lose this turn's "
-                      "points.")
-                break
-
-            _report(advisor, turn.state.current_roll, turn.state.turn_total)
-
-            choice = _prompt_keep(turn, advisor)
-            if choice is None:      # player quit
-                print("\nThanks for playing!")
-                return
-
-            dice_before = turn.state.dice_in_hand
-            turn.keep(choice)
-            got_hot_dice = (
-                hot_dice
-                and turn.state.dice_in_hand == 6
-                and len(choice) == dice_before
-            )
-            if got_hot_dice:
-                print("  *** HOT DICE! All six scored — pick them all back "
-                      "up and keep the streak going. ***")
-
-            if turn.state.dice_in_hand == 0:
-                # Only reachable with hot dice off: every die has scored and
-                # there is nothing left to roll, so the turn must be banked.
-                print("  All six dice have scored — banking automatically.")
-                turn.bank()
-                break
-
-            if _ask_roll_again(turn):
-                continue
-            turn.bank()
-
-        if turn.state.banked:
-            total_score += turn.state.turn_total
-            print(f"  Banked {turn.state.turn_total}. "
-                  f"Game score is now {total_score}.")
-
-    print(f"\n*** You reached {total_score} and won! ***")
-
-
-def _prompt_keep(turn: Turn, advisor: Advisor):
-    keeps = turn.legal_keeps()
+def _prompt_move(turn: Turn, advisor: Advisor):
+    """Ask the human for their move.  Returns ``(lock, hold)`` or ``None`` to
+    quit.  Syntax: face values to lock, optionally ``hold`` then more faces,
+    e.g. ``5 hold 6 6``.  ``best`` plays the advisor's pick."""
+    prompt = ("  Your move ('5', or '5 hold 6 6', 'best', '?', 'q'): "
+              if advisor.allow_hold
+              else "  Your keep ('1 5', 'best', '?', 'q'): ")
     while True:
-        raw = input("  Your keep (e.g. '1 5', 'best' for optimal, "
-                    "'?' for a hint, 'q' to quit): ").strip().lower()
+        raw = input(prompt).strip().lower()
         if raw in ("q", "quit", "exit"):
             return None
         if raw == "?":
-            scoring_faces = sorted({f for k in keeps for f in k.dice})
-            print(f"    Hint: the dice that can score here are "
-                  f"{_fmt_dice(scoring_faces)}. "
-                  f"Highest single keep is worth {keeps[0].score}.")
+            keeps = turn.legal_keeps()
+            faces = sorted({f for k in keeps for f in k.dice})
+            print(f"    Hint: dice that can score now: {_fmt_dice(faces)}. "
+                  f"Best single lock is worth {keeps[0].score}.")
             continue
         if raw in ("", "best", "b"):
-            decision = advisor.recommend(turn.state.current_roll,
-                                         turn.state.turn_total)
-            return list(decision.keep.dice)
-        try:
-            dice = [int(x) for x in raw.replace(",", " ").split()]
-        except ValueError:
-            print("  ! Enter face values separated by spaces, or 'best'.")
+            d = advisor.recommend(turn.state.current_roll,
+                                  turn.state.turn_total, held=turn.state.held)
+            if d is None:
+                return ([], [])
+            return (list(d.keep.dice), list(d.hold))
+        lock, hold = _parse_move(raw)
+        if lock is None:
+            print("  ! Enter faces to lock, optionally 'hold' more, or 'best'.")
             continue
         try:
-            turn._validate_keep(dice)
+            turn._validate_keep(lock, hold)
         except ValueError as e:
             print(f"  ! {e}")
             continue
-        return dice
+        return (lock, hold)
+
+
+def _parse_move(raw: str) -> Tuple[Optional[List[int]], List[int]]:
+    parts = raw.replace(",", " ").split("hold")
+    try:
+        lock = [int(x) for x in parts[0].split()]
+        hold = [int(x) for x in parts[1].split()] if len(parts) > 1 else []
+    except ValueError:
+        return None, []
+    return lock, hold
 
 
 def _ask_roll_again(turn: Turn) -> bool:
@@ -161,11 +133,68 @@ def _ask_roll_again(turn: Turn) -> bool:
         print("  ! Please answer y or n.")
 
 
+def _human_turn(advisor: Advisor, rules, hot_dice: bool, rng) -> Optional[int]:
+    """Run one interactive turn for the human.  Returns points banked, or None
+    if the player quit."""
+    turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
+    while not turn.state.over:
+        turn.roll()
+        if turn.state.farkled:
+            held = turn.state.history  # already logged
+            print(f"\nRoll: {_fmt_dice(turn.state.current_roll)}")
+            print("  >>> FARKLE! No new score. You lose this turn's points.")
+            return 0
+        _report(advisor, turn.state.current_roll, turn.state.turn_total,
+                held=turn.state.held)
+        move = _prompt_move(turn, advisor)
+        if move is None:
+            return None
+        lock, hold = move
+        turn.keep(lock, hold)
+        if turn.state.last_hot_dice:
+            print("  *** HOT DICE! All six scored — pick them all back up "
+                  "and keep the streak going. ***")
+        if turn.state.dice_in_hand == 0:
+            print("  Nothing left to roll — banking automatically.")
+            return turn.bank()
+        if not _ask_roll_again(turn):
+            return turn.bank()
+    return turn.state.turn_total
+
+
+# --- play mode -------------------------------------------------------------
+
+def play(args) -> None:
+    rules = DEFAULT_RULES
+    hot_dice = not args.no_hot_dice
+    rng = random.Random(args.seed) if args.seed is not None else random.Random()
+    advisor = Advisor(rules=rules, hot_dice=hot_dice, allow_hold=args.hold)
+
+    print("=" * 74)
+    print("  FARKLE — interactive play")
+    print(f"  Hot-dice: {'ON' if hot_dice else 'OFF'}   "
+          f"Hold rule: {'ON' if args.hold else 'OFF'}   "
+          f"(reach {args.target} to win)")
+    print("=" * 74)
+
+    total_score = 0
+    while total_score < args.target:
+        print(f"\n--- New turn (game score: {total_score}) ---")
+        banked = _human_turn(advisor, rules, hot_dice, rng)
+        if banked is None:
+            print("\nThanks for playing!")
+            return
+        total_score += banked
+        print(f"  Banked {banked}. Game score is now {total_score}.")
+
+    print(f"\n*** You reached {total_score} and won! ***")
+
+
 # --- versus-bot mode -------------------------------------------------------
 
 def _bot_take_turn(name: str, rules, hot_dice: bool, rng) -> int:
     """Play one turn for the practice bot, narrating each decision so the human
-    can learn to spot the scoring patterns."""
+    can learn to spot the scoring patterns.  (Rusty does not hold dice.)"""
     turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
     print(f"\n  {name}'s turn:")
     while not turn.state.over:
@@ -178,12 +207,8 @@ def _bot_take_turn(name: str, rules, hot_dice: bool, rng) -> int:
         keeps = turn.legal_keeps()
         dice_to_keep, roll_again = strategies.practice_bot(turn.state, keeps)
         score = score_of(dice_to_keep, rules)
-        dice_before = turn.state.dice_in_hand
         turn.keep(dice_to_keep)
-        note = ""
-        if hot_dice and turn.state.dice_in_hand == 6 and \
-                len(dice_to_keep) == dice_before:
-            note = "  (HOT DICE!)"
+        note = "  (HOT DICE!)" if turn.state.last_hot_dice else ""
         print(f"    rolls {_fmt_dice(full_roll)}"
               f" -> keeps {_fmt_dice(dice_to_keep)} (+{score}), "
               f"turn total {turn.state.turn_total}{note}")
@@ -201,21 +226,26 @@ def versus(args) -> None:
     rules = DEFAULT_RULES
     hot_dice = not args.no_hot_dice
     rng = random.Random(args.seed) if args.seed is not None else random.Random()
-    advisor = Advisor(rules=rules, hot_dice=hot_dice)
+    advisor = Advisor(rules=rules, hot_dice=hot_dice, allow_hold=args.hold)
     bot_name = "Rusty"
 
     print("=" * 74)
     print(f"  FARKLE — you vs {bot_name} (a friendly practice bot)")
-    print(f"  Hot-dice rule: {'ON' if hot_dice else 'OFF'}   "
+    print(f"  Hot-dice: {'ON' if hot_dice else 'OFF'}   "
+          f"Hold rule: {'ON' if args.hold else 'OFF'}   "
           f"first to {args.target} wins")
     print(f"  Tip: watch {bot_name}'s keeps to learn the scoring patterns. "
-          f"Use '?' at the prompt for a hint.")
+          f"Use '?' for a hint.")
     print("=" * 74)
 
     you, bot = 0, 0
     while you < args.target and bot < args.target:
         print(f"\n===== YOUR TURN (you {you} — {bot_name} {bot}) =====")
-        you += _human_turn(advisor, rules, hot_dice, rng)
+        banked = _human_turn(advisor, rules, hot_dice, rng)
+        if banked is None:
+            print("\nThanks for playing!")
+            return
+        you += banked
         print(f"  You now have {you}.")
         if you >= args.target:
             break
@@ -232,42 +262,20 @@ def versus(args) -> None:
     print("=" * 74)
 
 
-def _human_turn(advisor: Advisor, rules, hot_dice: bool, rng) -> int:
-    """Run one interactive turn for the human player; return points banked."""
-    turn = Turn(rules=rules, hot_dice=hot_dice, rng=rng)
-    while not turn.state.over:
-        turn.roll()
-        if turn.state.farkled:
-            print(f"\nRoll: {_fmt_dice(turn.state.current_roll)}")
-            print("  >>> FARKLE! You lose this turn's points.")
-            return 0
-        _report(advisor, turn.state.current_roll, turn.state.turn_total)
-        choice = _prompt_keep(turn, advisor)
-        if choice is None:
-            raise SystemExit("\nThanks for playing!")
-        dice_before = turn.state.dice_in_hand
-        turn.keep(choice)
-        if hot_dice and turn.state.dice_in_hand == 6 and \
-                len(choice) == dice_before:
-            print("  *** HOT DICE! Pick up all six and keep the streak. ***")
-        if turn.state.dice_in_hand == 0:
-            print("  All six scored — banking automatically.")
-            return turn.bank()
-        if not _ask_roll_again(turn):
-            return turn.bank()
-    return turn.state.turn_total
-
-
 # --- advise mode -----------------------------------------------------------
 
 def advise(args) -> None:
     hot_dice = not args.no_hot_dice
-    advisor = Advisor(rules=DEFAULT_RULES, hot_dice=hot_dice)
+    advisor = Advisor(rules=DEFAULT_RULES, hot_dice=hot_dice,
+                      allow_hold=args.hold)
     dice = args.dice
     if not dice:
         raw = input("Enter the dice you rolled (e.g. 1 1 3 4 5 6): ")
         dice = [int(x) for x in raw.replace(",", " ").split()]
-    _report(advisor, dice, args.turn_total)
+    if args.hold and args.held:
+        print("(analysing with dice already held: "
+              f"{_fmt_dice(args.held)})")
+    _report(advisor, dice, args.turn_total, held=args.held or ())
 
 
 # --- sim mode --------------------------------------------------------------
@@ -315,10 +323,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="farkle",
         description="Farkle simulator with an expected-value optimal-play "
-                    "advisor (supports the hot-dice household rule).",
+                    "advisor (hot-dice and hold house rules supported).",
     )
     p.add_argument("--no-hot-dice", action="store_true",
                    help="disable the 'pick up all six and keep going' rule")
+    p.add_argument("--hold", action="store_true",
+                   help="enable the hold rule (set aside non-scoring dice to "
+                        "build toward a combo)")
     sub = p.add_subparsers(dest="command", required=True)
 
     pp = sub.add_parser("play", help="play through turns interactively")
@@ -336,6 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the face values you rolled, e.g. 1 1 3 4 5 6")
     pa.add_argument("--turn-total", type=int, default=0,
                     help="points already banked this turn")
+    pa.add_argument("--held", nargs="*", type=int, default=None,
+                    help="dice you are already holding (with --hold)")
     pa.set_defaults(func=advise)
 
     ps = sub.add_parser("sim", help="Monte-Carlo strategies")

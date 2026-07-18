@@ -1,8 +1,18 @@
-"""Farkle game state: turns, dice, and the hot-dice household rule.
+"""Farkle game state: turns, dice, the hot-dice rule, and the hold rule.
 
 This module is the rules-faithful "referee".  It knows how a turn progresses
 but takes no strategic decisions itself — those come from a human (via the CLI)
 or from a strategy function (via the simulator).
+
+Two household rules are supported:
+
+* **hot dice** — when all six dice have scored, pick them all back up and keep
+  the streak going with the turn total carried forward.
+* **holding** — you may set aside *non-scoring* dice ("held" dice) to build
+  toward a combo on a later roll (e.g. hold two 6s hoping to roll a third).
+  Held dice keep their faces and combine with what you roll next.  A roll is a
+  Farkle unless it produces at least one *new* score — a freshly rolled 1/5 or
+  the completion of a held combo.
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ from .scoring import (
     DEFAULT_RULES,
     counts_from_dice,
     legal_keeps,
+    max_extract,
     score_selection,
 )
 
@@ -30,17 +41,29 @@ def roll_dice(n: int, rng: random.Random) -> List[int]:
 class TurnState:
     """Live state of a single turn."""
 
-    dice_in_hand: int              # dice available to roll next
+    locked_count: int = 0          # dice already scored & set aside this turn
+    held: List[int] = field(default_factory=list)   # non-scored dice being held
     turn_total: int = 0            # points banked this turn (lost on a Farkle)
-    current_roll: List[int] = field(default_factory=list)
+    current_roll: List[int] = field(default_factory=list)  # dice just rolled
     over: bool = False             # turn ended (banked or farkled)
     farkled: bool = False
     banked: bool = False
+    last_hot_dice: bool = False    # did the most recent keep trigger hot dice?
     history: List[str] = field(default_factory=list)
+
+    @property
+    def dice_in_hand(self) -> int:
+        """How many dice will be rolled next (the un-locked, un-held dice)."""
+        return 6 - self.locked_count - len(self.held)
+
+    @property
+    def pool(self) -> List[int]:
+        """Everything on the table this roll: held dice plus the current roll."""
+        return sorted(self.held + self.current_roll)
 
 
 class Turn:
-    """Drives one turn of Farkle, enforcing the rules including hot dice."""
+    """Drives one turn of Farkle, enforcing hot dice and the hold rule."""
 
     def __init__(
         self,
@@ -51,62 +74,76 @@ class Turn:
         self.rules = rules
         self.hot_dice = hot_dice
         self.rng = rng or random.Random()
-        self.state = TurnState(dice_in_hand=6)
+        self.state = TurnState()
 
     def roll(self) -> List[int]:
-        """Roll the dice currently in hand.  Sets ``farkled`` if nothing scores."""
+        """Roll the dice in hand.  Farkles unless the roll adds a *new* score
+        (over and above whatever the held dice already offered)."""
         if self.state.over:
             raise RuntimeError("turn is already over")
         dice = roll_dice(self.state.dice_in_hand, self.rng)
         self.state.current_roll = dice
-        counts = counts_from_dice(dice)
-        if not legal_keeps(counts, self.rules):
+        pool = counts_from_dice(self.state.pool)
+        held_counts = counts_from_dice(self.state.held)
+        if max_extract(pool, self.rules) <= max_extract(held_counts, self.rules):
             self.state.farkled = True
             self.state.over = True
             self.state.turn_total = 0
+            held_note = (f" (was holding {sorted(self.state.held)})"
+                         if self.state.held else "")
             self.state.history.append(
-                f"rolled {sorted(dice)} -> FARKLE, lost turn"
+                f"rolled {sorted(dice)}{held_note} -> FARKLE, lost turn"
             )
         else:
-            self.state.history.append(f"rolled {sorted(dice)}")
+            held_note = (f" + holding {sorted(self.state.held)}"
+                         if self.state.held else "")
+            self.state.history.append(f"rolled {sorted(dice)}{held_note}")
         return dice
 
     def legal_keeps(self) -> List[Keep]:
-        return legal_keeps(counts_from_dice(self.state.current_roll), self.rules)
+        """Scoring keeps available from the current pool (held + rolled)."""
+        return legal_keeps(counts_from_dice(self.state.pool), self.rules)
 
-    def keep(self, dice_to_keep) -> int:
-        """Set aside ``dice_to_keep`` (a list of face values from the current
-        roll).  Returns points earned.  Applies the hot-dice reset when all six
-        dice have scored.
+    def keep(self, lock, hold=()) -> int:
+        """Lock ``lock`` (a scoring selection) and optionally carry ``hold`` dice
+        forward.  Both are taken from the current pool (held + rolled).  Returns
+        the points scored by ``lock``.  Applies hot dice when all six are locked.
         """
         if self.state.over:
             raise RuntimeError("turn is already over")
-        self._validate_keep(dice_to_keep)
-        score = score_selection(counts_from_dice(dice_to_keep), self.rules)
+        lock = list(lock)
+        hold = list(hold)
+        self._validate_keep(lock, hold)
+        score = score_selection(counts_from_dice(lock), self.rules)
         assert score is not None  # validated above
-        self.state.turn_total += score
-        self.state.dice_in_hand -= len(list(dice_to_keep))
 
-        if self.state.dice_in_hand == 0:
+        self.state.turn_total += score
+        self.state.locked_count += len(lock)
+        self.state.held = hold
+        self.state.current_roll = []
+
+        hold_note = f", holding {sorted(hold)}" if hold else ""
+        self.state.last_hot_dice = False
+        if self.state.locked_count == 6:
             if self.hot_dice:
-                self.state.dice_in_hand = 6
+                self.state.locked_count = 0
+                self.state.held = []
+                self.state.last_hot_dice = True
                 self.state.history.append(
-                    f"kept {sorted(dice_to_keep)} (+{score}) -> HOT DICE, "
-                    f"pick up all 6"
+                    f"locked {sorted(lock)} (+{score}) -> HOT DICE, pick up all 6"
                 )
             else:
                 self.state.history.append(
-                    f"kept {sorted(dice_to_keep)} (+{score}) -> all dice used"
+                    f"locked {sorted(lock)} (+{score}) -> all dice used"
                 )
         else:
             self.state.history.append(
-                f"kept {sorted(dice_to_keep)} (+{score})"
+                f"locked {sorted(lock)} (+{score}){hold_note}"
             )
-        self.state.current_roll = []
         return score
 
     def bank(self) -> int:
-        """End the turn and keep ``turn_total``."""
+        """End the turn and keep ``turn_total``.  Held dice score nothing."""
         if self.state.over:
             raise RuntimeError("turn is already over")
         self.state.banked = True
@@ -116,30 +153,28 @@ class Turn:
 
     # -- helpers ------------------------------------------------------------
 
-    def _validate_keep(self, dice_to_keep) -> None:
-        kept = list(dice_to_keep)
-        if not kept:
-            raise ValueError("must keep at least one die")
-        roll = list(self.state.current_roll)
-        for face in kept:
-            if face in roll:
-                roll.remove(face)
+    def _validate_keep(self, lock, hold) -> None:
+        if not lock:
+            raise ValueError("must lock at least one scoring die each roll")
+        pool = list(self.state.pool)
+        for face in list(lock) + list(hold):
+            if face in pool:
+                pool.remove(face)
             else:
                 raise ValueError(
-                    f"die {face} is not available in the current roll "
-                    f"{sorted(self.state.current_roll)}"
+                    f"die {face} is not available in the pool "
+                    f"{sorted(self.state.pool)}"
                 )
-        if score_selection(counts_from_dice(kept), self.rules) is None:
-            raise ValueError(
-                f"{sorted(kept)} is not a fully-scoring selection"
-            )
+        if score_selection(counts_from_dice(lock), self.rules) is None:
+            raise ValueError(f"{sorted(lock)} is not a fully-scoring selection")
 
 
 # --- full game -------------------------------------------------------------
 
 Strategy = Callable[[TurnState, List[Keep]], Tuple[List[int], bool]]
 """A strategy takes the current turn state and the legal keeps for the roll,
-and returns ``(dice_to_keep, roll_again)``."""
+and returns ``(dice_to_lock, roll_again)``.  Simulator strategies do not hold
+dice; the hold rule is exercised through the advisor and interactive play."""
 
 
 @dataclass
@@ -182,14 +217,13 @@ def play_game(
     """
     rng = rng or random.Random()
     final_round = False
-    leader: Optional[Player] = None
     idx = 0
+    start_of_final = 0
     while True:
         player = players[idx % len(players)]
         player.score += play_turn(player.strategy, rules, hot_dice, rng)
         if not final_round and player.score >= target:
             final_round = True
-            leader = player
             start_of_final = idx
         if final_round and idx - start_of_final >= len(players) - 1:
             return max(players, key=lambda p: p.score)

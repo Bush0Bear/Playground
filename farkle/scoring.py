@@ -297,3 +297,24 @@ def legal_keeps(counts: Counts, rules: ScoreRules = DEFAULT_RULES) -> List[Keep]
 def has_score(counts: Counts, rules: ScoreRules = DEFAULT_RULES) -> bool:
     """True if the roll has at least one scoring die (i.e. it's not a Farkle)."""
     return bool(legal_keeps(counts, rules))
+
+
+def max_extract(counts: Counts, rules: ScoreRules = DEFAULT_RULES) -> int:
+    """Maximum points obtainable from ``counts`` using any subset of the dice.
+
+    Unlike :func:`score_selection` this does not require every die to be used —
+    it is the score of the single best keep, or 0 when nothing scores.  Used by
+    the "holding" house rule to decide whether a roll added any *new* score.
+    """
+    keeps = legal_keeps(counts, rules)
+    return keeps[0].score if keeps else 0
+
+
+def counts_minus(a: Counts, b) -> Counts:
+    """Subtract the multiset of face values ``b`` from Counts ``a``."""
+    rem = list(a)
+    for face in b:
+        if rem[face] <= 0:
+            raise ValueError(f"cannot remove {face}: not present in {a}")
+        rem[face] -= 1
+    return tuple(rem)  # type: ignore[return-value]

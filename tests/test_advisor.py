@@ -95,7 +95,7 @@ class TestPracticeBot:
         # Rusty is conservative: with a decent total and few dice he stops.
         from farkle.scoring import counts_from_dice, legal_keeps
         from farkle.game import TurnState
-        state = TurnState(dice_in_hand=2, turn_total=300)
+        state = TurnState(locked_count=4, turn_total=300)
         keeps = legal_keeps(counts_from_dice([5, 5]))
         _, roll_again = strategies.practice_bot(state, keeps)
         assert roll_again is False
